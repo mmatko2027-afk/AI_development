@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Детекція обʼєктів</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+    form { display: flex; gap: .5rem; align-items: center; margin: 1.5rem 0; flex-wrap: wrap; }
+    button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
+    #result { min-height: 3rem; white-space: pre-wrap; }
+    .error { color: #b00020; }
+    #image-container {
+  position: relative;
+  display: none;
+  margin-top: 2rem;
+  max-width: 100%;
+}
+
+#preview {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.box {
+  position: absolute;
+  border: 3px solid red;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.label {
+  position: absolute;
+  top: -25px;
+  left: -3px;
+  background: red;
+  color: white;
+  padding: 3px 6px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+  </style>
+</head>
+<body>
+  <h1>Детекція обʼєктів</h1>
+
+  <form id="detect-form">
+    <input id="image" type="file" name="image" accept="image/*" required>
+    <button type="submit">Знайти обʼєкти</button>
+  </form>
+  <div id="image-container">
+    <img id="preview" alt="Зображення">
+  </div>
+
+
+  <div id="result"></div>
+
+  <script>
+    // Сторінка звертається до власного ендпоінта застосунку.
+    // Як показувати знайдені обʼєкти — списком, таблицею, рамками поверх
+    // зображення — на ваш розсуд.
+    const form = document.getElementById('detect-form');
+    const result = document.getElementById('result');
+
+    const preview = document.getElementById('preview');
+    const imageContainer = document.getElementById('image-container');
+
+    document.getElementById('image').addEventListener('change', () => {
+    const file = document.getElementById('image').files[0];
+
+    if (!file) return;
+
+    preview.src = URL.createObjectURL(file);
+    imageContainer.style.display = 'block';
+
+    result.textContent = '';
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = document.getElementById('image').files[0];
+      if (!file) return;
+
+      const data = new FormData();
+      data.append('image', file);
+
+      result.className = '';
+      result.textContent = 'Обробка…';
+
+      try {
+        const response = await fetch('/api/detect', { method: 'POST', body: data });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          result.className = 'error';
+          result.textContent = 'Помилка: ' + JSON.stringify(payload);
+          return;
+        }
+
+        // TODO: показати клас, рамку й упевненість у зрозумілому вигляді,
+        //       а також кількість обʼєктів і час виконання.
+        // Видаляємо старі рамки
+document.querySelectorAll('.box').forEach(box => box.remove());
+
+// Отримуємо розміри оригінальної картинки
+const originalWidth = preview.naturalWidth;
+const originalHeight = preview.naturalHeight;
+
+// Отримуємо розміри картинки на екрані
+const displayedWidth = preview.clientWidth;
+const displayedHeight = preview.clientHeight;
+
+// Масштаб координат
+const scaleX = displayedWidth / originalWidth;
+const scaleY = displayedHeight / originalHeight;
+
+// Створюємо рамки для знайдених об'єктів
+payload.detections.forEach((detection) => {
+
+  const bbox = detection.bbox;
+
+  const box = document.createElement('div');
+  box.className = 'box';
+
+  box.style.left = `${bbox.x1 * scaleX}px`;
+  box.style.top = `${bbox.y1 * scaleY}px`;
+
+  box.style.width =
+    `${(bbox.x2 - bbox.x1) * scaleX}px`;
+
+  box.style.height =
+    `${(bbox.y2 - bbox.y1) * scaleY}px`;
+
+  // Назва об'єкта + відсоток
+  const label = document.createElement('div');
+  label.className = 'label';
+
+  label.textContent =
+    `${detection.class} ${(detection.confidence * 100).toFixed(1)}%`;
+
+  box.appendChild(label);
+
+  imageContainer.appendChild(box);
+});
+let text = `Результат аналізу:\n\n`;
+text += `Знайдено об'єктів: ${payload.count}\n\n`;
+
+payload.detections.forEach((detection) => {
+  text += `• ${detection.class} — ${(detection.confidence * 100).toFixed(1)}%\n`;
+});
+
+text += `\nЧас обробки: ${payload.inference_time_ms} мс`;
+
+
+result.textContent = text;
+      } catch (error) {
+        result.className = 'error';
+        result.textContent = 'Не вдалося звернутися до сервера.';
+      }
+    });
+  </script>
+</body>
+</html>
