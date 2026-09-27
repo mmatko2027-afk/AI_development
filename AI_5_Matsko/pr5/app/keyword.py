@@ -18,11 +18,13 @@
   семантичного пошуку.
 """
 
+import re
 from dataclasses import dataclass, field
+
+from rank_bm25 import BM25Okapi
 
 from .documents import Chunk
 from .index import DEFAULT_TOP_K, Hit
-
 
 @dataclass
 class KeywordIndex:
@@ -30,6 +32,8 @@ class KeywordIndex:
 
     chunks: list[Chunk]
     extra: dict = field(default_factory=dict)
+    bm25: object = None
+    
 
 
 def tokenize(text: str) -> list[str]:
@@ -38,12 +42,32 @@ def tokenize(text: str) -> list[str]:
     Одна й та сама функція для обох: запит і фрагмент мають розбиватися
     однаково, інакше збігів не буде.
     """
-    raise NotImplementedError("tokenize ще не реалізовано")
+
+    text = text.lower()
+
+    pattern = (
+        r"[a-zа-яіїєґ0-9]+"
+        r"(?:[-_][a-zа-яіїєґ0-9]+)*"
+    )
+
+    return re.findall(pattern, text)
+    
 
 
 def build(chunks: list[Chunk]) -> KeywordIndex:
     """Зібрати індекс за словами з тих самих фрагментів, що й векторний."""
-    raise NotImplementedError("build ще не реалізовано")
+    documents_tokens = []
+
+    for chunk in chunks:
+        tokens = tokenize(chunk.text)
+        documents_tokens.append(tokens)
+
+    bm25 = BM25Okapi(documents_tokens)
+
+    return KeywordIndex(
+        chunks=chunks,
+        bm25=bm25
+    )
 
 
 def search(
@@ -58,4 +82,74 @@ def search(
     самими фільтрами за метаданими, щоб сторінка показувала обидва
     способи поруч.
     """
-    raise NotImplementedError("search ще не реалізовано")
+    query = query.strip()
+
+    if not query:
+        raise ValueError(
+            "Пошуковий запит не може бути порожнім."
+        )
+
+    if top_k <= 0:
+        raise ValueError(
+            "top_k повинен бути більшим за 0."
+        )
+
+    filters = filters or {}
+
+    allowed_filters = {
+        "title",
+        "category",
+        "product",
+        "audience",
+        "updated",
+        "status",
+        "section",
+    }
+
+    for key in filters:
+        if key not in allowed_filters:
+            raise ValueError(
+                f"Невідомий фільтр: {key}"
+            )
+
+    query_tokens = tokenize(query)
+
+    if not query_tokens:
+        return []
+
+    scores = index.bm25.get_scores(query_tokens)
+
+    results = []
+
+    for number, score in enumerate(scores):
+
+        chunk = index.chunks[number]
+
+        matches = True
+
+        for key, expected_value in filters.items():
+
+            actual_value = chunk.metadata.get(key, "")
+
+            if str(actual_value).strip().lower() != str(
+                expected_value
+            ).strip().lower():
+                matches = False
+                break
+
+        if not matches:
+            continue
+
+        results.append(
+            Hit(
+                chunk=chunk,
+                score=float(score)
+            )
+        )
+
+    results.sort(
+        key=lambda hit: hit.score,
+        reverse=True
+    )
+
+    return results[:top_k]
