@@ -38,6 +38,9 @@ pr5/compare/findings.md
 pr6/index/
 pr6/eval/questions.json
 pr6/eval/findings.md
+pr6/evaluate.py
+pr6/evaluation_results.json
+pr6/questions.json
 
 # Редактори та ОС
 .vscode/

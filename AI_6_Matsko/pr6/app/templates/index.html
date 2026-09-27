@@ -116,7 +116,7 @@
 
   function metaParts(m) {
     const parts = [];
-    for (const key of ['heading', 'updated', 'status']) {
+    for (const key of ['section', 'updated', 'status']) {
       if (m[key]) parts.push(`${key}: ${m[key]}`);
     }
     return parts;
@@ -169,7 +169,7 @@
       const head = document.createElement('div');
       head.className = 'head';
       const score = typeof h.score === 'number' ? ` · ${h.score.toFixed(3)}` : '';
-      head.textContent = `[${i + 1}] ${m.title || h.source}${m.heading ? ' · ' + m.heading : ''}${score}`;
+      head.textContent = `[${i + 1}] ${m.title || h.source}${m.section ? ' · ' + m.section : ''}${score}`;
       const text = document.createElement('div');
       text.textContent = h.text;
       div.append(head, text);
