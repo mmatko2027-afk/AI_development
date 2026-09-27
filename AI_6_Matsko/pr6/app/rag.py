@@ -23,11 +23,13 @@
   на сторінці вони показуються окремо.
 """
 
+import time
 from dataclasses import dataclass, field
 
 from .index import Hit, SearchIndex
 from .keyword import KeywordIndex
-from .retrieval import Source
+from .retrieval import Source, retrieve, build_context
+from . import llm
 
 
 @dataclass
@@ -68,4 +70,110 @@ def answer(
     які не залежать від користувача, — не тут і не в аргументах, а в
     `retrieval.retrieve`.
     """
-    raise NotImplementedError("answer ще не реалізовано")
+    question = question.strip()
+
+    if not question:
+        raise ValueError("Питання не може бути порожнім.")
+
+    if index is None:
+        raise ValueError("Індекс не завантажено.")
+
+    retrieval_start = time.perf_counter()
+
+    hits = retrieve(
+        question,
+        index,
+        keyword_index,
+        filters=filters,
+    )
+
+    if not hits:
+        retrieval_time = time.perf_counter() - retrieval_start
+
+        return Answer(
+            text=(
+                "У базі знань немає достатньої інформації "
+                "для відповіді на це питання."
+            ),
+            found=False,
+            sources=[],
+            retrieved=[],
+            model=None,
+            elapsed={
+                "retrieval": round(retrieval_time, 3),
+                "generation": 0,
+            },
+            usage=None,
+        )
+
+    context, sources = build_context(hits)
+
+    retrieval_time = time.perf_counter() - retrieval_start
+
+    if not sources or not context.strip():
+        return Answer(
+            text=(
+                "У базі знань немає достатньої інформації "
+                "для відповіді на це питання."
+            ),
+            found=False,
+            sources=[],
+            retrieved=hits,
+            model=None,
+            elapsed={
+                "retrieval": round(retrieval_time, 3),
+                "generation": 0,
+            },
+            usage=None,
+        )
+
+    generation_start = time.perf_counter()
+
+    result = llm.ask(
+        question,
+        context,
+    )
+
+    generation_time = time.perf_counter() - generation_start
+
+    source_numbers = []
+
+    for source in sources:
+        source_numbers.append(source.ref)
+
+    model_sources = result.get("sources", [])
+
+    for source_number in model_sources:
+        if source_number not in source_numbers:
+            raise llm.LLMError(
+                "Модель послалася на джерело, "
+                "якого не було в контексті."
+            )
+
+    selected_sources = []
+
+    for source in sources:
+        if source.ref in model_sources:
+            selected_sources.append(source)
+
+    found = bool(result.get("found", False))
+
+    if found and not selected_sources:
+        found = False
+
+    if not found:
+        selected_sources = []
+
+    return Answer(
+        text=result["answer"],
+        found=found,
+        sources=selected_sources,
+        retrieved=hits,
+        model=result.get("model"),
+        elapsed={
+            "retrieval": round(retrieval_time, 3),
+            "generation": round(generation_time, 3),
+        },
+        usage=result.get("usage"),
+    )
+    

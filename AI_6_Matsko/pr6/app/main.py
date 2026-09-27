@@ -21,7 +21,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-
+from .llm import LLMError
 from . import index, keyword, rag
 
 app = FastAPI(title="Помічник за базою знань — ПР6")
@@ -89,6 +89,11 @@ def load_indexes() -> None:
 @app.get("/", response_class=HTMLResponse)
 def page() -> str:
     """Віддати сторінку помічника."""
+    if not INDEX_PAGE.exists():
+        return (
+            "<h1>Помічник за базою знань</h1>"
+            "<p>Файл templates/index.html не знайдено.</p>"
+        )
     return INDEX_PAGE.read_text(encoding="utf-8")
 
 
@@ -120,10 +125,44 @@ def api_ask(payload: AskRequest) -> dict:
     повідомлення має отримати сторінка в кожному випадку — вирішуєте ви;
     напрацювання з ПР3–ПР5 тут доречні.
     """
-    result = rag.answer(
-        payload.question,
-        app.state.index,
-        app.state.keyword_index,
-        filters=payload.filters or None,
-    )
-    return answer_to_dict(result)
+    question = payload.question.strip()
+
+    if not question:
+        return {
+            "error": "Питання не може бути порожнім."
+        }
+
+    if app.state.index is None:
+        return {
+            "error": (
+                "Індекс не завантажено. "
+                "Спочатку виконайте python ingest.py"
+            )
+        }
+    try:
+        result = rag.answer(
+            question,
+            app.state.index,
+            app.state.keyword_index,
+            filters=payload.filters or None,
+        )
+
+        return answer_to_dict(result)
+
+    except ValueError as exc:
+        return {
+            "error": str(exc)
+        }
+
+    except LLMError as exc:
+        return {
+            "error": str(exc)
+        }
+
+    except Exception as exc:
+        return {
+            "error": (
+                "Виникла внутрішня помилка "
+                f"застосунку: {exc}"
+            )
+        }
