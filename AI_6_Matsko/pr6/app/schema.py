@@ -22,6 +22,10 @@ pydantic-модель. Реалізацію з ПР4 можна взяти за 
 ні до чого не привʼязані, крім вашого коду.
 """
 
+import json
+
+from jsonschema import validate as jsonschema_validate
+from jsonschema.exceptions import ValidationError
 
 def output_schema() -> dict:
     """Повернути JSON Schema відповіді моделі.
@@ -30,7 +34,31 @@ def output_schema() -> dict:
     (через `response_format` або текстом в інструкції) і використовується
     для перевірки того, що повернулося.
     """
-    raise NotImplementedError("output_schema ще не реалізовано")
+    return {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string"
+            },
+            "found": {
+                "type": "boolean"
+            },
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            }
+        },
+        "required": [
+            "answer",
+            "found",
+            "sources"
+        ],
+        "additionalProperties": False
+    }
+    
 
 
 def validate(raw: str) -> dict:
@@ -44,4 +72,22 @@ def validate(raw: str) -> dict:
     тих, що їй показали, і чи не «знайшла» вона відповідь, не пославшись
     ні на що, — перевірка змісту, і її місце в `app/rag.py`.
     """
-    raise NotImplementedError("validate ще не реалізовано")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Модель повернула неправильний JSON: {exc}"
+        ) from exc
+
+    try:
+        jsonschema_validate(
+            instance=data,
+            schema=output_schema()
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            f"Відповідь моделі не відповідає схемі: {exc.message}"
+        ) from exc
+
+    return data
+    

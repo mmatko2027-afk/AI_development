@@ -30,8 +30,9 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 from .documents import Chunk
-from .index import Hit, SearchIndex
+from .index import Hit, SearchIndex, search
 from .keyword import KeywordIndex
+from .embeddings import embed_query
 
 load_dotenv()
 
@@ -55,6 +56,8 @@ class Source:
     chunk: Chunk
     score: float
 
+def estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
 
 def retrieve(
     query: str,
@@ -74,8 +77,31 @@ def retrieve(
     коректний результат: він означає «у базі знань про це немає», і що
     робити далі, вирішує `app/rag.py`.
     """
-    raise NotImplementedError("retrieve ще не реалізовано")
+    if index is None:
+        raise ValueError("Індекс не завантажено.")
 
+    query = query.strip()
+
+    if not query:
+        raise ValueError("Пошуковий запит не може бути порожнім.")
+
+    safe_filters = dict(filters or {})
+
+    safe_filters["audience"] = "клієнти"
+    safe_filters["status"] = "чинний"
+
+    search_top_k = max(CONTEXT_CHUNKS * 2, 8)
+
+    hits = search(
+        index,
+        query_vector=embed_query(query),
+        top_k=search_top_k,
+        filters=safe_filters,
+    )
+
+    hits = hits[:CONTEXT_CHUNKS]
+
+    return hits
 
 def build_context(hits: list[Hit], budget: int = CONTEXT_BUDGET) -> tuple[str, list[Source]]:
     """Зібрати з влучень текст контексту для моделі та перелік джерел.
@@ -91,4 +117,51 @@ def build_context(hits: list[Hit], budget: int = CONTEXT_BUDGET) -> tuple[str, l
     вже писали в ПР4. Повертає текст контексту й список `Source` у тому
     самому порядку, що й у тексті.
     """
-    raise NotImplementedError("build_context ще не реалізовано")
+    if budget <= 0:
+        raise ValueError("Бюджет контексту повинен бути більшим за 0.")
+
+    context_parts = []
+    sources = []
+
+    used_tokens = 0
+    ref = 1
+
+    for hit in hits:
+        chunk = hit.chunk
+
+        title = chunk.metadata.get("title", chunk.source)
+        section = chunk.metadata.get("section", "без розділу")
+        updated = chunk.metadata.get("updated", "дата не вказана")
+
+        part = (
+            f"[{ref}]\n"
+            f"Документ: {title}\n"
+            f"Розділ: {section}\n"
+            f"Дата редакції: {updated}\n"
+            f"Текст:\n"
+            f"{chunk.text}\n"
+        )
+
+        part_tokens = estimate_tokens(part)
+
+        if used_tokens + part_tokens > budget:
+            continue
+
+        source = Source(
+            ref=ref,
+            chunk=chunk,
+            score=hit.score,
+        )
+
+        context_parts.append(part)
+        sources.append(source)
+
+        used_tokens += part_tokens
+        ref += 1
+
+        if len(sources) >= CONTEXT_CHUNKS:
+            break
+
+    context = "\n".join(context_parts)
+
+    return context, sources
