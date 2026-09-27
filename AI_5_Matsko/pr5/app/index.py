@@ -24,6 +24,7 @@
 * чи потрібен поріг схожості й звідки взяти його значення.
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +32,8 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 
-from .documents import Chunk
+from app.documents import Chunk
+from app.embeddings import embed_query
 
 load_dotenv()
 
@@ -78,7 +80,30 @@ def build(chunks: list[Chunk], vectors: np.ndarray, model_name: str) -> SearchIn
     вирішується, що зробити з векторами перед пошуком (наприклад,
     нормалізувати, якщо схожість — косинусна).
     """
-    raise NotImplementedError("build ще не реалізовано")
+    if len(chunks) != len(vectors):
+        raise ValueError(
+            "Кількість фрагментів не відповідає кількості векторів."
+        )
+
+    vectors = np.asarray(vectors, dtype=np.float32)
+
+    
+    if len(vectors) > 0:
+        norms = np.linalg.norm(
+            vectors,
+            axis=1,
+            keepdims=True
+        )
+
+        norms[norms == 0] = 1.0
+        vectors = vectors / norms
+
+    return SearchIndex(
+        chunks=chunks,
+        vectors=vectors,
+        model_name=model_name
+    )
+    
 
 
 def save(index: SearchIndex, path: Path = INDEX_DIR) -> None:
@@ -87,7 +112,40 @@ def save(index: SearchIndex, path: Path = INDEX_DIR) -> None:
     Формат — ваше рішення: `numpy` для векторів і JSON для фрагментів з
     метаданими — цілком достатньо. Назву моделі зберігайте обовʼязково.
     """
-    raise NotImplementedError("save ще не реалізовано")
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    np.save(path / "vectors.npy", index.vectors)
+
+
+    chunks_data = []
+
+    for chunk in index.chunks:
+        chunks_data.append({
+            "text": chunk.text,
+            "source": chunk.source,
+            "metadata": chunk.metadata
+        })
+
+    data = {
+        "model_name": index.model_name,
+        "chunks": chunks_data,
+        "extra": index.extra
+    }
+    with open(
+        path / "index.json",
+        "w",
+        encoding="utf-8"
+    ) as file:
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    print(f"Індекс збережено у: {path}")
+    
 
 
 def load(path: Path = INDEX_DIR) -> SearchIndex:
@@ -97,7 +155,54 @@ def load(path: Path = INDEX_DIR) -> SearchIndex:
     сказати користувачеві «індекс не збудовано», а не впасти з
     `FileNotFoundError` десь усередині.
     """
-    raise NotImplementedError("load ще не реалізовано")
+    path = Path(path)
+
+    vectors_path = path / "vectors.npy"
+    json_path = path / "index.json"
+
+    if not vectors_path.exists():
+        raise FileNotFoundError(
+            "Індекс не збудовано: файл vectors.npy не знайдено. "
+            "Спочатку виконайте python ingest.py"
+        )
+
+    if not json_path.exists():
+        raise FileNotFoundError(
+            "Індекс не збудовано: файл index.json не знайдено. "
+            "Спочатку виконайте python ingest.py"
+        )
+
+    vectors = np.load(vectors_path)
+    with open(
+        json_path,
+        "r",
+        encoding="utf-8"
+    ) as file:
+        data = json.load(file)
+
+    chunks = []
+
+    for item in data["chunks"]:
+        chunks.append(
+            Chunk(
+                text=item["text"],
+                source=item["source"],
+                metadata=item["metadata"]
+            )
+        )
+
+    if len(chunks) != len(vectors):
+        raise ValueError(
+            "Кількість фрагментів у index.json "
+            "не відповідає кількості векторів."
+        )
+    return SearchIndex(
+        chunks=chunks,
+        vectors=vectors,
+        model_name=data["model_name"],
+        extra=data.get("extra", {})
+    )
+    
 
 
 def search(
@@ -117,4 +222,84 @@ def search(
     оцінки. Оцінка — та сама міра схожості, що й для ранжування, і саме
     вона показується користувачеві.
     """
-    raise NotImplementedError("search ще не реалізовано")
+
+    if top_k <= 0:
+        raise ValueError(
+            "top_k повинен бути більшим за 0."
+        )
+
+    filters = filters or {}
+
+    allowed_filters = {
+        "title",
+        "category",
+        "product",
+        "audience",
+        "updated",
+        "status",
+        "section"
+    }
+    for key in filters:
+        if key not in allowed_filters:
+            raise ValueError(
+                f"Невідомий фільтр: {key}. "
+                f"Дозволені: {', '.join(sorted(allowed_filters))}"
+            )
+
+    query_vector = np.asarray(
+        query_vector,
+        dtype=np.float32
+    )
+
+    norm = np.linalg.norm(query_vector)
+
+    if norm != 0:
+        query_vector = query_vector / norm
+
+    if len(index.vectors) == 0:
+        return []
+    scores = index.vectors @ query_vector
+
+    results = []
+
+    for number, score in enumerate(scores):
+
+        chunk = index.chunks[number]
+
+        matches = True
+
+        for key, expected_value in filters.items():
+            actual_value = chunk.metadata.get(key, "")
+
+            actual_value = str(
+                actual_value
+            ).strip().lower()
+
+            expected_value = str(
+                expected_value
+            ).strip().lower()
+
+            if actual_value != expected_value:
+                matches = False
+                break
+
+        if not matches:
+            continue
+
+        score = float(score)
+
+        if threshold is not None and score < threshold:
+            continue
+        results.append(
+            Hit(
+                chunk=chunk,
+                score=score
+            )
+        )
+
+    results.sort(
+        key=lambda hit: hit.score,
+        reverse=True
+    )
+
+    return results[:top_k]
