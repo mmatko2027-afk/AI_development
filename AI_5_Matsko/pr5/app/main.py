@@ -19,7 +19,7 @@ HTTP-статусом.
 import time
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -114,6 +114,24 @@ def api_search(payload: SearchRequest) -> dict:
     закінчується помилкою 500. Який статус і яке повідомлення має
     отримати сторінка в кожному випадку — вирішуєте ви.
     """
+    if not payload.query.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Пошуковий запит не може бути порожнім."
+        )
+
+    if payload.mode not in ("semantic", "keyword", "both"):
+        raise HTTPException(
+            status_code=400,
+            detail="Невідомий режим пошуку."
+        )
+
+    if app.state.index is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Індекс не збудовано. Спочатку виконайте python ingest.py"
+        )
+
     idx = app.state.index
     result: dict = {"query": payload.query, "semantic": None, "keyword": None, "elapsed": {}}
 
