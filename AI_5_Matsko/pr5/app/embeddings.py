@@ -24,6 +24,7 @@ import os
 
 import numpy as np
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -31,7 +32,7 @@ load_dotenv()
 # Hugging Face Hub; для моделі через API — назва в провайдера.
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
 
-
+_model = None
 def get_model():
     """Повернути готову до роботи модель.
 
@@ -39,8 +40,17 @@ def get_model():
     памʼяті — створюйте її один раз, а не на кожен запит. Для моделі через
     API тут створюється клієнт (ключ — із `.env`, як у ПР3).
     """
-    raise NotImplementedError("get_model ще не реалізовано")
+    global _model
 
+    if _model is None:
+        print(
+            f"Завантаження моделі: {MODEL_NAME}"
+        )
+        _model = SentenceTransformer(
+            MODEL_NAME
+        )
+        print("Модель завантажена.")
+    return _model
 
 def embed_passages(texts: list[str]) -> np.ndarray:
     """Перетворити тексти фрагментів на вектори.
@@ -48,7 +58,28 @@ def embed_passages(texts: list[str]) -> np.ndarray:
     Повертає масив розміру (кількість текстів × розмірність моделі).
     Викликається під час індексування — для всієї колекції одразу.
     """
-    raise NotImplementedError("embed_passages ще не реалізовано")
+    if not texts:
+        return np.empty(
+            (0, 0),
+            dtype=np.float32
+        )
+
+    model = get_model()
+
+    prepared_texts = [
+        f"passage: {text}"
+        for text in texts
+    ]
+
+    vectors = model.encode(
+        prepared_texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=True
+    )
+
+    return vectors.astype(np.float32)
+    
 
 
 def embed_query(text: str) -> np.ndarray:
@@ -57,4 +88,24 @@ def embed_query(text: str) -> np.ndarray:
     Окрема функція навмисно: у моделей із префіксами запит кодується не
     так, як фрагмент, і саме тут це видно.
     """
-    raise NotImplementedError("embed_query ще не реалізовано")
+    text = text.strip()
+
+    if not text:
+        raise ValueError(
+            "Пошуковий запит не може бути порожнім."
+        )
+
+    model = get_model()
+
+    prepared_query = f"query: {text}"
+
+    vector = model.encode(
+        [prepared_query],
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    )
+
+    return vector[0].astype(
+        np.float32
+    )
+    
