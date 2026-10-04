@@ -27,6 +27,43 @@
 Описати схему можна JSON Schema вручну або pydantic-моделлю.
 """
 
+import json
+
+from pydantic import BaseModel, ValidationError
+class Supplier(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    iban: str | None = None
+
+
+class Buyer(BaseModel):
+    name: str | None = None
+    code: str | None = None
+
+
+class Item(BaseModel):
+    name: str | None = None
+    unit: str | None = None
+    quantity: str | None = None
+    price: str | None = None
+    amount: str | None = None
+
+
+class Invoice(BaseModel):
+    document_type: str
+
+    invoice_number: str | None = None
+    date: str | None = None
+    valid_until: str | None = None
+
+    supplier: Supplier | None = None
+    buyer: Buyer | None = None
+
+    items: list[Item] = []
+
+    total_without_vat: str | None = None
+    vat: str | None = None
+    total_due: str | None = None
 
 def output_schema() -> dict:
     """Повернути JSON Schema відповіді моделі.
@@ -35,7 +72,7 @@ def output_schema() -> dict:
     (через `response_format` або текстом в інструкції) і використовується
     для перевірки того, що повернулося.
     """
-    raise NotImplementedError("output_schema ще не реалізовано")
+    return Invoice.model_json_schema()
 
 
 def validate(raw: str) -> dict:
@@ -49,4 +86,16 @@ def validate(raw: str) -> dict:
     Чи сходиться сума з позиціями і чи існує такий IBAN — перевірка
     змісту, і її місце в `app/rules.py`.
     """
-    raise NotImplementedError("validate ще не реалізовано")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Відповідь моделі не є правильним JSON.") from exc
+
+    try:
+        invoice = Invoice.model_validate(data)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Відповідь не відповідає схемі: {exc}"
+        ) from exc
+
+    return invoice.model_dump()
