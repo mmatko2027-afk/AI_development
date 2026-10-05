@@ -41,7 +41,15 @@ pr6/eval/findings.md
 # персональні дані, тож до репозиторію не потрапляють
 pr7/samples/own/
 pr7/eval/findings.md
+check_own.py
 
+debug_compare.py
+
+pr7/eval/errors.txt
+pr7/compare.py
+
+.env
+check_own.py
 # Редактори та ОС
 .vscode/
 .idea/
