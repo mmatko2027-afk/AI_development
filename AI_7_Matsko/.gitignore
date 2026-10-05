@@ -47,7 +47,7 @@ debug_compare.py
 
 pr7/eval/errors.txt
 pr7/compare.py
-
+pr7/evaluate.py
 .env
 check_own.py
 # Редактори та ОС
