@@ -29,6 +29,7 @@
 """
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -62,7 +63,12 @@ def load_reference() -> tuple[dict, list[dict]]:
     return company, suppliers
 
 
+def clean_text(value: str) -> str:
+    value = value.replace("ʼ", "'")
+    value = value.replace("’", "'")
+    value = re.sub(r"\s+", " ", value)
 
+    return value.strip()
 
 def check(document: dict) -> list[Issue]:
     """Застосувати правила до вилученого документа.
@@ -158,7 +164,7 @@ def check(document: dict) -> list[Issue]:
     buyer = document.get("buyer")
 
     if buyer:
-        if buyer.get("name") != company["name"]:
+        if clean_text(buyer.get("name", "")) != clean_text(company["name"]):
             issues.append(
                 Issue(
                     "buyer.name",
@@ -202,7 +208,9 @@ def check(document: dict) -> list[Issue]:
                 )
             )
         else:
-            if supplier_iban != found_supplier["iban"]:
+            iban1 = supplier_iban.replace(" ", "").replace("\u00a0", "")
+            iban2 = found_supplier["iban"].replace(" ", "").replace("\u00a0", "")
+            if iban1.upper() != iban2.upper():
                 issues.append(
                     Issue(
                         "supplier.iban",
@@ -218,13 +226,12 @@ def check(document: dict) -> list[Issue]:
     for number, item in enumerate(items):
 
         try:
-            quantity = Decimal(str(item.get("quantity")))
-            price = Decimal(str(item.get("price")))
-            amount = Decimal(str(item.get("amount")))
+            quantity = Decimal(str(item.get("quantity")).replace(" ", "").replace("\u00a0", "").replace(",", "."))           
+            price = Decimal(str(item.get("price")).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            amount = Decimal(str(item.get("amount")).replace(" ", "").replace("\u00a0", "").replace(",", "."))
 
             calculated = quantity * price
 
-            # Округлення до копійок
             calculated = calculated.quantize(Decimal("0.01"))
             amount = amount.quantize(Decimal("0.01"))
 

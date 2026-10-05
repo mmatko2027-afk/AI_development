@@ -23,8 +23,10 @@
 * що вимірювати окремо: підготовку, вилучення, перевірки.
 """
 
+import time
 from dataclasses import dataclass, field
 
+from . import images, llm, rules
 from .rules import Issue
 
 
@@ -54,9 +56,78 @@ class Result:
 def decide(document: dict, issues: list[Issue]) -> tuple[str, list[str]]:
     """Вирішити долю документа за вилученими полями й знайденими
     проблемами. Повертає рішення і його причини."""
-    raise NotImplementedError("decide ще не реалізовано")
+    reasons = []
+
+    if document.get("document_type") != "invoice":
+        return "reject", ["Документ не є рахунком на оплату."]
+
+    if issues:
+        for issue in issues:
+            reasons.append(issue.message)
+
+        return "review", reasons
+
+    return "auto", ["Усі перевірки пройдено успішно."]
 
 
 def process(content: bytes) -> Result:
     """Обробити файл: підготувати → вилучити → перевірити → вирішити."""
-    raise NotImplementedError("process ще не реалізовано")
+    start = time.perf_counter()
+
+    try:
+        image = images.prepare(content)
+    except images.ImageError as error:
+        return Result(
+            decision="reject",
+            reasons=[str(error)],
+        )
+
+    prepare_time = time.perf_counter() - start
+
+    start = time.perf_counter()
+
+    try:
+        result = llm.extract(image)
+    except llm.LLMError as error:
+        return Result(
+            decision="review",
+            reasons=[str(error)],
+            image={
+                "original": image.original,
+                "sent": image.sent,
+            },
+            elapsed={
+                "prepare": round(prepare_time, 3),
+                "extraction": round(time.perf_counter() - start, 3),
+            },
+        )
+
+    extraction_time = time.perf_counter() - start
+
+    document = result["data"]
+
+    start = time.perf_counter()
+
+    issues = rules.check(document)
+
+    checks_time = time.perf_counter() - start
+
+    decision, reasons = decide(document, issues)
+
+    return Result(
+        decision=decision,
+        reasons=reasons,
+        document=document,
+        issues=issues,
+        image={
+            "original": image.original,
+            "sent": image.sent,
+        },
+        model=result["model"],
+        elapsed={
+            "prepare": round(prepare_time, 3),
+            "extraction": round(extraction_time, 3),
+            "checks": round(checks_time, 3),
+        },
+        usage=result["usage"],
+    )
