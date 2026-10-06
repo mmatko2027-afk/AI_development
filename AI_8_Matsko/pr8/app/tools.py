@@ -35,7 +35,11 @@
   пояснити їх клієнтові, не вигадуючи.
 """
 
+import json
+
 from dataclasses import dataclass
+
+from shop import service
 
 
 @dataclass
@@ -274,6 +278,13 @@ def specs() -> list[dict]:
         },
     ]
 
+def make_result(status, content=None, reason=None, arguments=None):
+    return ToolResult(
+        status=status,
+        content=content,
+        reason=reason,
+        arguments=arguments,
+    )
 
 def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
     """Виконати виклик інструмента, який запропонувала модель.
@@ -287,4 +298,265 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
     Жоден виняток звідси не має вийти назовні: будь-який результат —
     `ToolResult`.
     """
-    raise NotImplementedError("call ще не реалізовано")
+    allowed_tools = [
+        "list_orders",
+        "get_order",
+        "search_products",
+        "get_product",
+        "get_stock",
+        "delivery_quote",
+        "create_return",
+    ]
+
+    if name not in allowed_tools:
+        return make_result(
+            "rejected",
+            reason="Такого інструмента немає.",
+        )
+
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        return make_result(
+            "rejected",
+            reason="Аргументи мають бути правильним JSON.",
+        )
+
+    if not isinstance(arguments, dict):
+        return make_result(
+            "rejected",
+            reason="Аргументи повинні бути JSON-об'єктом.",
+        )
+
+    customer_id = ctx.customer_id
+
+    try:
+
+        if name == "list_orders":
+
+            orders = service.list_orders(customer_id)
+
+            result = []
+
+            for order in orders:
+                result.append({
+                    "order_id": order["order_id"],
+                    "date": order["date"],
+                    "status": order["status"],
+                    "total": order["total"],
+                    "items_count": order["items_count"],
+                })
+
+            return make_result(
+                "ok",
+                result,
+                arguments=arguments,
+            )
+
+        if name == "get_order":
+
+            order_id = arguments.get("order_id")
+
+            if not order_id:
+                return make_result(
+                    "rejected",
+                    reason="Не вказано номер замовлення.",
+                    arguments=arguments,
+                )
+
+            order = service.get_order(order_id)
+
+            if order["customer_id"] != customer_id:
+                return make_result(
+                    "rejected",
+                    reason="Це замовлення належить іншому клієнту.",
+                    arguments=arguments,
+                )
+
+            result = {
+                "order_id": order["order_id"],
+                "date": order["date"],
+                "status": order["status"],
+                "total": order["total"],
+                "items": order["items"],
+                "delivery": order["delivery"],
+            }
+
+            return make_result(
+                "ok",
+                result,
+                arguments=arguments,
+            )
+
+        if name == "search_products":
+
+            query = arguments.get("query")
+
+            if not query:
+                return make_result(
+                    "rejected",
+                    reason="Не вказано, що потрібно знайти.",
+                    arguments=arguments,
+                )
+
+            products = service.search_products(
+                query=query,
+                category=arguments.get("category"),
+                max_price=arguments.get("max_price"),
+                limit=arguments.get("limit", 5),
+            )
+
+            result = []
+
+            for product in products:
+                result.append({
+                    "sku": product["sku"],
+                    "name": product["name"],
+                    "category": product["category"],
+                    "price": product["price"],
+                    "description": product["description"],
+                })
+
+            return make_result(
+                "ok",
+                result,
+                arguments=arguments,
+            )
+
+        if name == "get_product":
+
+            sku = arguments.get("sku")
+
+            if not sku:
+                return make_result(
+                    "rejected",
+                    reason="Не вказано SKU товару.",
+                    arguments=arguments,
+                )
+
+            product = service.get_product(sku)
+
+            result = {
+                "sku": product["sku"],
+                "name": product["name"],
+                "category": product["category"],
+                "price": product["price"],
+                "weight": product["weight"],
+                "warranty": product["warranty"],
+                "returnable": product["returnable"],
+                "description": product["description"],
+            }
+
+            return make_result(
+                "ok",
+                result,
+                arguments=arguments,
+            )
+
+        if name == "get_stock":
+
+            sku = arguments.get("sku")
+
+            if not sku:
+                return make_result(
+                    "rejected",
+                    reason="Не вказано SKU товару.",
+                    arguments=arguments,
+                )
+
+            stock = service.get_stock(sku)
+
+            result = {
+                "sku": sku,
+                "available": stock["available"],
+                "incoming": stock["incoming"],
+            }
+
+            return make_result(
+                "ok",
+                result,
+                arguments=arguments,
+            )
+
+        if name == "delivery_quote":
+
+            city = arguments.get("city")
+            method = arguments.get("method")
+            items = arguments.get("items")
+
+            if not city or not method or not items:
+                return make_result(
+                    "rejected",
+                    reason="Для доставки потрібні місто, спосіб доставки та товари.",
+                    arguments=arguments,
+                )
+
+            quote = service.delivery_quote(
+                city=city,
+                method=method,
+                items=items,
+            )
+
+            return make_result(
+                "ok",
+                quote,
+                arguments=arguments,
+            )
+
+        if name == "create_return":
+
+            order_id = arguments.get("order_id")
+            sku = arguments.get("sku")
+            reason = arguments.get("reason")
+            quantity = arguments.get("quantity", 1)
+            comment = arguments.get("comment")
+
+            if not order_id or not sku or not reason:
+                return make_result(
+                    "rejected",
+                    reason="Для повернення потрібні замовлення, товар і причина.",
+                    arguments=arguments,
+                )
+
+            order = service.get_order(order_id)
+
+            if order["customer_id"] != customer_id:
+                return make_result(
+                    "rejected",
+                    reason="Це замовлення належить іншому клієнту.",
+                    arguments=arguments,
+                )
+
+            return_data = service.create_return(
+                order_id=order_id,
+                sku=sku,
+                reason=reason,
+                quantity=quantity,
+                comment=comment,
+            )
+
+            return make_result(
+                "ok",
+                return_data,
+                arguments=arguments,
+            )
+
+    except service.ShopError as error:
+        return make_result(
+            "error",
+            reason=str(error),
+            arguments=arguments,
+        )
+
+    except Exception as error:
+        return make_result(
+            "error",
+            reason="Внутрішня помилка сервісу магазину.",
+            arguments=arguments,
+        )
+
+    return make_result(
+        "rejected",
+        reason="Виклик не був виконаний.",
+        arguments=arguments,
+    )
