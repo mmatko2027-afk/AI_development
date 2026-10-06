@@ -21,9 +21,12 @@
 """
 
 import os
+import time
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
+
+from . import llm, tools
 
 load_dotenv()
 
@@ -77,4 +80,14 @@ def answer(question: str, customer_id: str) -> Answer:
     `customer_id` — клієнт, який увійшов; його передає веб-рівень, а не
     модель.
     """
-    raise NotImplementedError("answer ще не реалізовано")
+    messages = llm.build_messages(question)
+
+    context = tools.Context(
+        customer_id=customer_id
+    )
+
+    return Answer(
+        text="Поки що цикл роботи асистента не реалізовано.",
+        rounds=0,
+        stopped="not_implemented",
+    )
