@@ -86,8 +86,28 @@ def answer(question: str, customer_id: str) -> Answer:
         customer_id=customer_id
     )
 
+    try:
+        result = llm.chat(
+            messages=messages,
+            tools=tools.specs(),
+            tool_choice="auto",
+        )
+    except llm.LLMError as exc:
+        return Answer(
+            text=f"Не вдалося отримати відповідь від мовної моделі: {exc}",
+            rounds=1,
+            stopped="model_error",
+        )
+
+    message = result["message"]
+
     return Answer(
-        text="Поки що цикл роботи асистента не реалізовано.",
-        rounds=0,
-        stopped="not_implemented",
+        text=message.get("content") or "",
+        rounds=1,
+        stopped="answer",
+        model=result.get("model"),
+        elapsed={
+            "model": result.get("elapsed", 0)
+        },
+        usage=result.get("usage"),
     )
