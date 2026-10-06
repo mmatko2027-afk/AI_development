@@ -341,8 +341,9 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
             for order in orders:
                 result.append({
                     "order_id": order["order_id"],
-                    "date": order["date"],
+                    "date": order["created_at"],
                     "status": order["status"],
+                    "status_label": order["status_label"],
                     "total": order["total"],
                     "items_count": order["items_count"],
                 })

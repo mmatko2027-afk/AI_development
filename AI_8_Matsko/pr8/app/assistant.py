@@ -86,28 +86,103 @@ def answer(question: str, customer_id: str) -> Answer:
         customer_id=customer_id
     )
 
-    try:
-        result = llm.chat(
-            messages=messages,
-            tools=tools.specs(),
-            tool_choice="auto",
-        )
-    except llm.LLMError as exc:
-        return Answer(
-            text=f"Не вдалося отримати відповідь від мовної моделі: {exc}",
-            rounds=1,
-            stopped="model_error",
-        )
+    calls = []
+    total_model_time = 0
+    total_usage = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
 
-    message = result["message"]
+    for round_number in range(1, MAX_ROUNDS + 1):
+        try:
+            result = llm.chat(
+                messages=messages,
+                tools=tools.specs(),
+                tool_choice="auto",
+            )
+        except llm.LLMError as exc:
+            return Answer(
+                text=f"Не вдалося отримати відповідь від мовної моделі: {exc}",
+                calls=calls,
+                rounds=round_number,
+                stopped="model_error",
+                elapsed={
+                    "model": total_model_time
+                },
+                usage=total_usage,
+            )
+
+        total_model_time += result.get("elapsed", 0)
+
+        usage = result.get("usage")
+
+        if usage:
+            total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+            total_usage["total_tokens"] += usage.get("total_tokens", 0)
+
+        message = result["message"]
+
+        messages.append(message)
+
+        tool_calls = message.get("tool_calls", [])
+
+        if not tool_calls:
+            return Answer(
+                text=message.get("content") or "",
+                calls=calls,
+                rounds=round_number,
+                stopped="answer",
+                model=result.get("model"),
+                elapsed={
+                    "model": total_model_time
+                },
+                usage=total_usage,
+            )
+
+        for tool_call in tool_calls:
+            tool_name = tool_call["function"]["name"]
+            raw_arguments = tool_call["function"]["arguments"]
+            tool_call_id = tool_call["id"]
+
+            start_tool = time.perf_counter()
+
+            tool_result = tools.call(
+                tool_name,
+                raw_arguments,
+                context,
+            )
+
+            tool_elapsed = time.perf_counter() - start_tool
+
+            calls.append(
+                ToolTrace(
+                    round=round_number,
+                    name=tool_name,
+                    arguments=raw_arguments,
+                    status=tool_result.status,
+                    reason=tool_result.reason,
+                    result=tool_result.content,
+                    elapsed=tool_elapsed,
+                )
+            )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": str(tool_result.content),
+                }
+            )
 
     return Answer(
-        text=message.get("content") or "",
-        rounds=1,
-        stopped="answer",
-        model=result.get("model"),
+        text="Не вдалося отримати остаточну відповідь у встановлену кількість раундів.",
+        calls=calls,
+        rounds=MAX_ROUNDS,
+        stopped="max_rounds",
         elapsed={
-            "model": result.get("elapsed", 0)
+            "model": total_model_time
         },
-        usage=result.get("usage"),
+        usage=total_usage,
     )

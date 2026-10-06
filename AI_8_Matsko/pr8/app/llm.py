@@ -159,16 +159,19 @@ def chat(messages: list[dict], tools: list[dict], tool_choice: str = "auto") -> 
         message["tool_calls"] = []
 
         for tool_call in sdk_message.tool_calls:
-            message["tool_calls"].append(
-                {
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
-                    },
-                }
-            )
+            item = {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+
+            if hasattr(tool_call, "extra_content") and tool_call.extra_content:
+                item["extra_content"] = tool_call.extra_content
+
+            message["tool_calls"].append(item)
 
     usage = None
 
