@@ -286,6 +286,37 @@ def make_result(status, content=None, reason=None, arguments=None):
         arguments=arguments,
     )
 
+def validate_arguments(name, arguments):
+    if name == "get_order":
+        if "order_id" not in arguments:
+            return "Не вказано номер замовлення."
+
+        if not isinstance(arguments["order_id"], str):
+            return "order_id має бути рядком."
+
+    if name == "get_product":
+        if "sku" not in arguments:
+            return "Не вказано SKU товару."
+
+        if not isinstance(arguments["sku"], str):
+            return "sku має бути рядком."
+
+    if name == "get_stock":
+        if "sku" not in arguments:
+            return "Не вказано SKU товару."
+
+        if not isinstance(arguments["sku"], str):
+            return "sku має бути рядком."
+
+    if name == "search_products":
+        if "query" not in arguments:
+            return "Не вказано, що потрібно знайти."
+
+        if not isinstance(arguments["query"], str):
+            return "query має бути рядком."
+
+    return None
+
 def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
     """Виконати виклик інструмента, який запропонувала модель.
 
@@ -329,6 +360,14 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
         )
 
     customer_id = ctx.customer_id
+    validation_error = validate_arguments(name, arguments)
+
+    if validation_error:
+        return make_result(
+            "rejected",
+            reason=validation_error,
+            arguments=arguments,
+        )
 
     try:
 
@@ -375,13 +414,14 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
                 )
 
             result = {
-                "order_id": order["order_id"],
-                "date": order["date"],
-                "status": order["status"],
-                "total": order["total"],
-                "items": order["items"],
-                "delivery": order["delivery"],
-            }
+              "order_id": order["order_id"],
+              "date": order["created_at"],
+              "status": order["status"],
+              "status_label": order["status_label"],
+              "total": order["total"],
+              "items": order["items"],
+              "delivery": order["delivery"],
+          }
 
             return make_result(
                 "ok",
