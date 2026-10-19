@@ -196,4 +196,54 @@ def complete(messages: list[dict], schema: dict | None = None) -> dict:
     `usage`. Перевірка JSON за схемою — не тут, а в `app/schema.py`:
     модуль моделі не знає, що саме означають поля.
     """
-    raise NotImplementedError("complete ще не реалізовано")
+    start = time.perf_counter()
+
+    request = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
+
+    if schema is not None:
+        request["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "customer_request",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+
+    try:
+        response = get_client().chat.completions.create(**request)
+    except Exception as exc:
+        raise LLMError(f"Помилка мовної моделі: {exc}") from exc
+
+    elapsed = time.perf_counter() - start
+
+    if not response.choices:
+        raise LLMError("Мовна модель не повернула відповідь")
+
+    choice = response.choices[0]
+    content = choice.message.content
+
+    if content is None:
+        content = ""
+
+    usage = None
+
+    if response.usage:
+        usage = {
+            "prompt_tokens": response.usage.prompt_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+
+    return {
+        "text": content,
+        "finish_reason": choice.finish_reason,
+        "model": response.model,
+        "elapsed": elapsed,
+        "usage": usage,
+    }

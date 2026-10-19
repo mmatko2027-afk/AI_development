@@ -26,7 +26,7 @@
 
 Описати схему можна JSON Schema вручну або pydantic-моделлю.
 """
-
+import json
 
 def request_schema() -> dict:
     """Повернути JSON Schema результату розбору звернення.
@@ -34,7 +34,53 @@ def request_schema() -> dict:
     Та сама схема передається моделі (`response_format`) і перевіряє
     те, що повернулося.
     """
-    raise NotImplementedError("request_schema ще не реалізовано")
+    return {
+        "type": "object",
+        "properties": {
+            "intent": {
+                "type": "string",
+                "enum": [
+                    "return",
+                    "cancel_order",
+                    "order_status",
+                    "other"
+                ],
+                "description": "Основний вид звернення клієнта."
+            },
+            "order_number": {
+                "type": ["string", "null"],
+                "description": "Номер замовлення або null, якщо його не названо."
+            },
+            "product_name": {
+                "type": ["string", "null"],
+                "description": "Назва товару зі слів клієнта або null."
+            },
+            "return_category": {
+                "type": ["string", "null"],
+                "enum": [
+                    "not_suitable",
+                    "defect",
+                    "wrong_item",
+                    "damaged_delivery",
+                    "other",
+                    None
+                ],
+                "description": "Категорія причини повернення або null."
+            },
+            "return_reason": {
+                "type": ["string", "null"],
+                "description": "Причина повернення словами клієнта або null."
+            }
+        },
+        "required": [
+            "intent",
+            "order_number",
+            "product_name",
+            "return_category",
+            "return_reason"
+        ],
+        "additionalProperties": False
+    }
 
 
 def validate(raw: str) -> dict:
@@ -47,4 +93,39 @@ def validate(raw: str) -> dict:
     Схема перевіряє форму. Чи існує замовлення і чиє воно — перевірка
     змісту, і її місце на наступних кроках workflow.
     """
-    raise NotImplementedError("validate ще не реалізовано")
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError("Відповідь моделі не є коректним JSON.")
+
+    if not isinstance(data, dict):
+        raise ValueError("Результат розбору має бути JSON-об'єктом.")
+
+    schema = request_schema()
+    properties = schema["properties"]
+
+    for field in schema["required"]:
+        if field not in data:
+            raise ValueError(f"Відсутнє обов'язкове поле: {field}")
+
+    for field in data:
+        if field not in properties:
+            raise ValueError(f"Невідоме поле: {field}")
+
+    for field, rules in properties.items():
+        value = data[field]
+        allowed_types = rules["type"]
+
+        if value is None:
+            if "null" not in allowed_types:
+                raise ValueError(f"Поле {field} не може бути null.")
+        elif "string" in allowed_types and not isinstance(value, str):
+            raise ValueError(f"Поле {field} має бути рядком.")
+
+        if value is not None and "enum" in rules:
+            if value not in rules["enum"]:
+                raise ValueError(
+                    f"Недопустиме значення поля {field}: {value}"
+                )
+
+    return data
