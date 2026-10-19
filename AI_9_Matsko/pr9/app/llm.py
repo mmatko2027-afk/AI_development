@@ -41,7 +41,7 @@ load_dotenv()
 BASE_URL = os.getenv("LLM_BASE_URL")
 API_KEY = os.getenv("LLM_API_KEY")
 MODEL = os.getenv("LLM_MODEL")
-
+_client = None
 # Параметри генерації.
 TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "800"))

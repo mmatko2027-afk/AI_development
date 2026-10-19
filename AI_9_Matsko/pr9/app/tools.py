@@ -294,6 +294,28 @@ def specs() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "cancel_order",
+                "description": (
+                    "Скасовує власне замовлення клієнта, "
+                    "якщо воно ще готується. Викликати лише "
+                    "після підтвердження клієнтом."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {
+                            "type": "string",
+                            "description": "Номер замовлення."
+                        }
+                    },
+                    "required": ["order_id"],
+                    "additionalProperties": False
+                }
+            }
+        },
     ]
 
 
@@ -355,6 +377,7 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
         "get_stock",
         "delivery_quote",
         "create_return",
+        "cancel_order",
     ]
 
     if name not in allowed_tools:
@@ -472,8 +495,7 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
                     "sku": product["sku"],
                     "name": product["name"],
                     "category": product["category"],
-                    "price": product["price"],
-                    "description": product["description"],
+                    "price": product["price"]
                 })
 
             return make_result(
@@ -500,8 +522,8 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
                 "name": product["name"],
                 "category": product["category"],
                 "price": product["price"],
-                "weight": product["weight"],
-                "warranty": product["warranty"],
+                "weight": product["weight_kg"],
+                "warranty": product["warranty_months"],
                 "returnable": product["returnable"],
                 "description": product["description"],
             }
@@ -528,7 +550,7 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
             result = {
                 "sku": sku,
                 "available": stock["available"],
-                "incoming": stock["incoming"],
+                "expected_restock": stock["expected_restock"],
             }
 
             return make_result(
@@ -597,6 +619,36 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
             return make_result(
                 "ok",
                 return_data,
+                arguments=arguments,
+            )
+        if name == "cancel_order":
+            order_id = arguments.get("order_id")
+
+            if not order_id:
+                return make_result(
+                    "rejected",
+                    reason="Не вказано номер замовлення.",
+                    arguments=arguments,
+                )
+
+            order = service.get_order(order_id)
+
+            if order["customer_id"] != customer_id:
+                return make_result(
+                    "rejected",
+                    reason="Це замовлення належить іншому клієнту.",
+                    arguments=arguments,
+                )
+
+            result = service.cancel_order(order_id)
+
+            return make_result(
+                "ok",
+                {
+                    "order_id": result["order_id"],
+                    "status": result["status"],
+                    "status_label": result["status_label"],
+                },
                 arguments=arguments,
             )
 
