@@ -52,6 +52,10 @@ pr9/runs/
 pr9/eval/requests.json
 pr9/eval/findings.md
 pr9/test_schema.py
+pr9/test_pr9.py
+pr9/test_results.json
+pr9/test_summary.csv
+pr9/findings.md
 
 # Редактори та ОС
 .vscode/
