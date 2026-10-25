@@ -17,8 +17,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Iterator
-
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request,HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -43,10 +42,24 @@ class DraftIn(BaseModel):
 
 def draft_to_dict(draft: jobs.Draft) -> dict:
     """Знімок чернетки для сторінки — без журналу подій."""
-    data = asdict(draft)
-    data["events"] = len(draft.events)
-    return data
-
+    return {
+        "draft_id": draft.draft_id,
+        "request_id": draft.request_id,
+        "client": draft.client,
+        "status": draft.status,
+        "text": draft.text,
+        "attempts": draft.attempts,
+        "provider": draft.provider,
+        "model": draft.model,
+        "fallback": draft.fallback,
+        "error": draft.error,
+        "usage": draft.usage,
+        "elapsed": draft.elapsed,
+        "warnings": draft.warnings,
+        "created_at": draft.created_at,
+        "updated_at": draft.updated_at,
+        "events": len(draft.events),
+    }
 
 @app.get("/", response_class=HTMLResponse)
 def page() -> str:
@@ -80,8 +93,42 @@ def api_create(payload: DraftIn) -> dict:
     пізніше, у фоні, і стає подією `error`, а не помилкою цього запиту.
     """
     sample = samples.get(payload.request_id)
-    limits.acquire(payload.client)
-    return draft_to_dict(jobs.start(sample, payload.client))
+
+    if sample is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "request_not_found",
+                "message": "Звернення не знайдено."
+            }
+        )
+
+    try:
+        limits.acquire(payload.client)
+    except limits.RateLimited as exc:
+        retry_after = max(1, int(exc.retry_after + 0.999))
+
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "message": "Ліміт запитів вичерпано. Спробуйте пізніше."
+            },
+            headers={"Retry-After": str(retry_after)}
+        )
+
+    try:
+        draft = jobs.start(sample, payload.client)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "draft_start_failed",
+                "message": "Не вдалося запустити генерацію чернетки."
+            }
+        )
+
+    return draft_to_dict(draft)
 
 
 @app.get("/api/drafts")
@@ -93,7 +140,15 @@ def api_drafts() -> list[dict]:
 @app.get("/api/drafts/{draft_id}")
 def api_draft(draft_id: str) -> dict:
     """Знімок однієї чернетки. Невідомий номер поки що дає 500."""
-    return draft_to_dict(jobs.get(draft_id))
+    draft = jobs.get(draft_id)
+
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Чернетку не знайдено."
+        )
+
+    return draft_to_dict(draft)
 
 
 @app.get("/api/drafts/{draft_id}/events")
@@ -106,6 +161,11 @@ def api_events(draft_id: str, request: Request) -> StreamingResponse:
     живим; якщо клієнт відключився, спроба записати в нього завершує
     генератор.
     """
+    if jobs.get(draft_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Чернетку не знайдено."
+        )
     try:
         since = int(request.headers.get("last-event-id") or 0)
     except ValueError:
@@ -127,4 +187,17 @@ def api_events(draft_id: str, request: Request) -> StreamingResponse:
 def api_cancel(draft_id: str) -> dict:
     """Скасувати генерацію. Скасування вже завершеної або невідомої
     чернетки поки що дає 500 — який статус тут доречний, вирішуєте ви."""
-    return draft_to_dict(jobs.cancel(draft_id))
+    try:
+        draft = jobs.cancel(draft_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail="Чернетку не знайдено."
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail="Чернетка вже завершена."
+        )
+
+    return draft_to_dict(draft)

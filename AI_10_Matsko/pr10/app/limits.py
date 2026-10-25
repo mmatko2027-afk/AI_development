@@ -25,13 +25,16 @@
 """
 
 import os
-
+import time
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
 
 PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
-
+_requests = {}
+_lock = threading.Lock()
+WINDOW = 60
 
 class RateLimited(Exception):
     """Ліміт вичерпано. `retry_after` — через скільки секунд пробувати."""
@@ -51,4 +54,21 @@ def acquire(client: str) -> None:
 
     Викликається веб-рівнем перед створенням кожної чернетки.
     """
-    raise NotImplementedError("acquire ще не реалізовано")
+    now = time.monotonic()
+
+    with _lock:
+        requests = _requests.get(client, [])
+
+        requests = [
+            request_time
+            for request_time in requests
+            if now - request_time < WINDOW
+        ]
+
+        if len(requests) >= PER_MINUTE:
+            retry_after = WINDOW - (now - requests[0])
+            _requests[client] = requests
+            raise RateLimited(max(1, retry_after))
+
+        requests.append(now)
+        _requests[client] = requests

@@ -49,8 +49,12 @@ server-sent events; реалізація фонової роботи до цьо
 import datetime
 import threading
 import uuid
-from dataclasses import dataclass, field
+import time
 from typing import Iterator
+from dataclasses import dataclass, field
+from .drafting import build_request, check
+from .gateway import generate
+from .providers.base import Request, ProviderError
 
 # Статуси, після яких подій більше не буде.
 TERMINAL = {"done", "failed", "cancelled"}
@@ -86,6 +90,9 @@ class Draft:
     created_at: str = ""
     updated_at: str = ""
     events: list[dict] = field(default_factory=list)
+    cancel_event: threading.Event = field(
+        default_factory=threading.Event
+    )
 
 
 _drafts: dict[str, Draft] = {}
@@ -161,13 +168,179 @@ def subscribe(draft_id: str, since: int = 0, heartbeat: float = 15.0) -> Iterato
         since += len(pending)
 
 
+def _run_draft(draft: Draft, sample: dict):
+    started = time.perf_counter()
+
+    try:
+        with _changed:
+            if draft.cancel_event.is_set():
+                return
+
+            draft.status = "running"
+            draft.events.append({
+                "id": len(draft.events) + 1,
+                "event": "status",
+                "data": {"status": "running"}
+            })
+            _changed.notify_all()
+
+        request = build_request(sample)
+
+
+        def on_delta(text):
+            if not text:
+                return
+
+            with _changed:
+                if draft.status != "running":
+                    return
+
+                draft.text += text
+                draft.events.append({
+                    "id": len(draft.events) + 1,
+                    "event": "delta",
+                    "data": {"text": text}
+                })
+                _changed.notify_all()
+
+        def on_status(data):
+            with _changed:
+                if draft.status != "running":
+                    return
+
+                draft.attempts = max(
+                    draft.attempts,
+                    data.get("attempt", 0)
+                )
+
+                if "provider" in data:
+                    draft.provider = data["provider"]
+
+                if "fallback" in data:
+                    draft.fallback = data["fallback"]
+
+                draft.events.append({
+                    "id": len(draft.events) + 1,
+                    "event": "status",
+                    "data": data
+                })
+                _changed.notify_all()
+
+        result = generate(
+            request,
+            on_delta,
+            on_status,
+            draft.cancel_event.is_set
+        )
+        warnings = check(result.text, sample)
+
+        with _changed:
+  
+            if draft.status != "running":
+                return
+
+            draft.text = result.text
+            draft.provider = result.provider
+            draft.model = result.model
+            draft.usage = result.usage
+            draft.warnings = warnings
+            draft.elapsed = {
+                "total": round(time.perf_counter() - started, 2)
+            }
+            draft.status = "done"
+
+            draft.events.append({
+                "id": len(draft.events) + 1,
+                "event": "done",
+                "data": {
+                    "text": draft.text,
+                    "provider": draft.provider,
+                    "model": draft.model,
+                    "usage": draft.usage or {},
+                    "elapsed": draft.elapsed,
+                    "attempts": draft.attempts,
+                    "fallback": draft.fallback,
+                    "warnings": draft.warnings
+                }
+            })
+            _changed.notify_all()
+
+    except ProviderError as exc:
+        with _changed:
+            if draft.status == "cancelled":
+                return
+
+            draft.status = "failed"
+            draft.error = {
+                "kind": exc.kind,
+                "message": exc.message,
+                "retryable": exc.retryable
+            }
+
+            draft.events.append({
+                "id": len(draft.events) + 1,
+                "event": "error",
+                "data": draft.error
+            })
+            _changed.notify_all()
+
+    except Exception:
+        with _changed:
+            if draft.status == "cancelled":
+                return
+
+            draft.status = "failed"
+            draft.error = {
+                "kind": "internal_error",
+                "message": "Не вдалося згенерувати чернетку.",
+                "retryable": False
+            }
+
+            draft.events.append({
+                "id": len(draft.events) + 1,
+                "event": "error",
+                "data": draft.error
+            })
+            _changed.notify_all()
+
 def start(sample: dict, client: str) -> Draft:
     """Створити чернетку для звернення `sample` і запустити генерацію у
     фоні. Повертає чернетку одразу — найімовірніше, ще `queued`."""
-    raise NotImplementedError("start ще не реалізовано")
+    request_id = str(sample.get("id", uuid.uuid4().hex))
+    draft = new_draft(request_id, client)
+
+    thread = threading.Thread(
+        target=_run_draft,
+        args=(draft, sample),
+        daemon=True
+    )
+    thread.start()
+
+    return draft
 
 
 def cancel(draft_id: str) -> Draft:
     """Попросити фонову роботу зупинитися. Повертає чернетку; якщо її
     немає або вона вже завершена — вирішуєте ви."""
-    raise NotImplementedError("cancel ще не реалізовано")
+    with _changed:
+        draft = _drafts.get(draft_id)
+
+        if draft is None:
+            raise KeyError("Чернетку не знайдено")
+
+        if draft.status in TERMINAL:
+            raise ValueError("Чернетка вже завершена")
+
+        draft.cancel_event.set()
+        draft.status = "cancelled"
+        draft.updated_at = _now()
+
+        draft.events.append({
+            "id": len(draft.events) + 1,
+            "event": "cancelled",
+            "data": {}
+        })
+
+        _changed.notify_all()
+
+        return draft

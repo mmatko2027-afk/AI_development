@@ -37,6 +37,8 @@
 """
 
 import os
+import time
+import random
 from typing import Iterator
 
 from dotenv import load_dotenv
@@ -57,11 +59,111 @@ class MockProvider:
     name = "mock"
     model = "mock-1"
 
+    
+    def _get_text(self, request: Request) -> str:
+        """Отримати приклад відповіді для потрібного звернення."""
+
+        from ..samples import get
+
+        request_id = request.metadata.get("request_id")
+        if request_id is None:
+            request_id = request.metadata.get("sample_id")
+
+        sample = get(str(request_id)) if request_id is not None else None
+
+        if sample is not None:
+            return sample.get(
+                "reply_example",
+                "Дякуємо за звернення. Ми уточнимо інформацію."
+            )
+
+        return (
+            "Дякуємо за звернення. "
+            "Ваше питання потребує додаткового уточнення."
+        )
+
+
+    def _check_failure(self) -> None:
+        """За потреби відтворити помилку."""
+
+        if random.random() >= FAILURE_RATE:
+            return
+
+        if FAILURE_KIND == "timeout":
+            time.sleep(max(FIRST_DELAY_MS / 1000, 1))
+            raise ProviderError(
+                "timeout",
+                "Час очікування відповіді вичерпано.",
+                retryable=True,
+            )
+
+        if FAILURE_KIND == "rate_limit":
+            raise ProviderError(
+                "rate_limit",
+                "Перевищено ліміт запитів.",
+                retryable=True,
+                retry_after=1,
+            )
+
+        if FAILURE_KIND == "mid_stream":
+            return
+
+        raise ProviderError(
+            FAILURE_KIND,
+            "Підставний провайдер імітував помилку.",
+            retryable=FAILURE_KIND in ("unavailable", "timeout", "rate_limit"),
+        )
+
+
     def complete(self, request: Request) -> Result:
         """Повернути відповідь цілком — після тих самих затримок і з
         тими самими збоями, що й у `stream`."""
-        raise NotImplementedError("MockProvider.complete ще не реалізовано")
+        start = time.monotonic()
+        time.sleep(FIRST_DELAY_MS / 1000)
+        self._check_failure()
+
+        return Result(
+            text=self._get_text(request),
+            provider=self.name,
+            model=self.model,
+            usage=None,
+            finish_reason="stop",
+            elapsed=time.monotonic() - start,
+        )
 
     def stream(self, request: Request) -> Iterator[Chunk]:
         """Віддавати текст фрагментами з затримкою `DELAY_MS` між ними."""
-        raise NotImplementedError("MockProvider.stream ще не реалізовано")
+        start = time.monotonic()
+        time.sleep(FIRST_DELAY_MS / 1000)
+        self._check_failure()
+
+        text = self._get_text(request)
+        words = text.split()
+        mid_stream = (
+            FAILURE_KIND == "mid_stream"
+            and random.random() < FAILURE_RATE
+        )
+
+        for index, word in enumerate(words):
+            if index > 0:
+                time.sleep(DELAY_MS / 1000)
+
+            if mid_stream and index >= max(1, len(words) // 2):
+                raise ProviderError(
+                    "unavailable",
+                    "З'єднання перервано під час відповіді.",
+                    retryable=True,
+                    detail="mock mid_stream failure",
+                )
+
+            chunk_text = word
+            if index < len(words) - 1:
+                chunk_text += " "
+
+            yield Chunk(text=chunk_text)
+
+        yield Chunk(
+            text="",
+            usage=None,
+            finish_reason="stop",
+        )

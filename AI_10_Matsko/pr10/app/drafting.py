@@ -86,14 +86,27 @@ def check(text: str, sample: dict) -> list[str]:
         warnings.append("Чернетка занадто довга.")
 
     facts = sample.get("facts", [])
-    facts_text = str(facts)
 
-    numbers = re.findall(r"\b[A-ZА-ЯІЇЄҐ]*-?\d{3,}\b", facts_text)
+    if isinstance(facts, list):
+        facts_text = " ".join(str(fact) for fact in facts)
+    else:
+        facts_text = str(facts)
 
-    for number in numbers:
-        if number not in text:
-            warnings.append(
-                f"Перевірте, чи потрібно вказати номер {number}."
+    pattern = r"\b\d{1,4}(?:[./-]\d{1,2}){1,2}\b|\b\d[\d\s.,]*\d|\b\d\b"
+
+    draft_numbers = re.findall(pattern, text)
+    facts_numbers = re.findall(pattern, facts_text)
+
+    for number in draft_numbers:
+        normalized = number.strip()
+
+        if normalized not in facts_numbers:
+            warning = (
+                f"Перевірте число «{normalized}»: "
+                "його немає серед наданих фактів."
             )
+
+            if warning not in warnings:
+                warnings.append(warning)
 
     return warnings
