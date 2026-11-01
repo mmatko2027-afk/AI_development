@@ -17,12 +17,10 @@
 повертає `CheckResult`: пройшла чи ні й чому. Приклад пройшов, якщо
 пройшли всі його перевірки.
 
-Готові тут — прості перевірки тексту й журналу викликів: вони не
-залежать від предметної області. Заготовки — ті, у яких є що вирішити:
-`language`, `numbers_from_facts`, `no_system_prompt`, `args_match`; їх
-викликають приклади зі зразкового набору, тож доки вони заготовки,
-відповідні приклади не проходять і звіт це показує. Модель-суддя
-(`judge`) викликає `judge.evaluate` — заготовку в `judge.py`.
+Готові тут прості перевірки тексту й журналу викликів, а також
+`language`, `numbers_from_facts`, `no_system_prompt` і `args_match`.
+Вони дають зрозумілий початковий рівень; за потреби адаптуйте їх до
+своїх даних. Модель-суддя (`judge`) викликає `judge.evaluate`.
 
 Свої перевірки додавайте тут само декоратором `@check("назва")`.
 """
@@ -292,7 +290,7 @@ def _rounds_max(params: dict, case: dict, output: dict) -> CheckResult:
     return CheckResult("rounds_max", ok, f"{rounds} звертань" + ("" if ok else f", межа {params['n']}"))
 
 
-# ---- заготовки: тут є що вирішити ----
+# ---- перевірки мови, чисел і витоку інструкції ----
 
 @check("language")
 def _language(params: dict, case: dict, output: dict) -> CheckResult:
@@ -487,7 +485,7 @@ def _judge(params: dict, case: dict, output: dict) -> CheckResult:
     text = text_of(output)
     if text is None:
         return no_text("judge", output)
-    import judge  # локально: judge.py читає .env і може бути заготовкою
+    import judge  # локально: judge.py читає налаштування .env
 
     criteria = params.get("criteria") or list(judge.RUBRIC)
     verdict = judge.evaluate(case, output, criteria)

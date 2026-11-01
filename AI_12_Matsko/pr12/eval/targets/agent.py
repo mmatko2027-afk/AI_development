@@ -63,21 +63,9 @@ def before_case(case: dict) -> None:
 
 
 def _system_prompt() -> str | None:
-    """Текст системної інструкції помічника, якщо його можна дістати.
-
-    Поверніть тут свою інструкцію з `pr8/app/llm.py` — наприклад,
-    `from app import llm; return llm.SYSTEM_PROMPT`. Нижче — спроба
-    вгадати типові назви; якщо жодна не підходить, повертається None.
-    """
-    try:
-        from app import llm  # noqa: E402
-    except ImportError:
-        return None
-    for name in ("SYSTEM_PROMPT", "SYSTEM", "INSTRUCTION", "INSTRUCTIONS", "SYSTEM_MESSAGE"):
-        value = getattr(llm, name, None)
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
+    """Повернути системну інструкцію з модуля моделі ПР8."""
+    from app import llm  # noqa: E402
+    return llm.SYSTEM_PROMPT
 
 
 def _as_dict(obj) -> dict:
