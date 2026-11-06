@@ -38,8 +38,9 @@ from pathlib import Path
 
 NAME = "drafts"
 
-_default_dir = Path(__file__).resolve().parents[3] / "pr11"
-APP_DIR = Path(os.getenv("DRAFTS_APP_DIR") or _default_dir).resolve()
+PR12_DIR = Path(__file__).resolve().parents[2]
+_app_dir = Path(os.getenv("DRAFTS_APP_DIR") or PR12_DIR.parent / "pr11")
+APP_DIR = (_app_dir if _app_dir.is_absolute() else PR12_DIR / _app_dir).resolve()
 USE_CACHE = os.getenv("EVAL_USE_CACHE", "0") == "1"
 
 _app: types.SimpleNamespace | None = None

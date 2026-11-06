@@ -13,7 +13,8 @@
 Готове тут: стартова рубрика `RUBRIC` (адаптуйте під свою інструкцію
 чернетки), контракт вердикту `Verdict`, його JSON Schema для
 `response_format`, розбір відповіді `parse_verdict`, формування
-повідомлень і виклик моделі з одним повтором на невалідну відповідь. Рішення з
+повідомлень і виклик моделі з повтором на невалідну відповідь та обмеженим
+backoff на тимчасові помилки API. Рішення з
 розділу 2 практичної роботи:
 
 * якою моделлю судити: інша, ніж та, що генерує (самоуподобання), —
@@ -33,6 +34,7 @@
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,6 +46,7 @@ JUDGE_BASE_URL = os.getenv("JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL", "")
 JUDGE_API_KEY = os.getenv("JUDGE_API_KEY") or os.getenv("LLM_API_KEY", "")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "")
 JUDGE_TIMEOUT = float(os.getenv("JUDGE_TIMEOUT", "30"))
+JUDGE_TRANSIENT_RETRIES = 2
 
 # Рубрика: ідентифікатор критерію → формулювання для судді. Кожен
 # критерій бінарний. Відправна точка — адаптуйте під свою інструкцію
@@ -205,6 +208,37 @@ def build_messages(case: dict, output: dict, criteria: list[str]) -> list[dict]:
     ]
 
 
+def _create_completion(client, messages: list[dict], response_format: dict):
+    """Повторити тимчасовий збій API судді з обмеженою паузою."""
+    import openai
+
+    transient_errors = (
+        openai.RateLimitError,
+        openai.APITimeoutError,
+        openai.APIConnectionError,
+        openai.InternalServerError,
+    )
+    for attempt in range(JUDGE_TRANSIENT_RETRIES + 1):
+        try:
+            return client.chat.completions.create(
+                model=JUDGE_MODEL,
+                messages=messages,
+                temperature=0,
+                max_tokens=1200,
+                response_format=response_format,
+            )
+        except transient_errors as exc:
+            if attempt >= JUDGE_TRANSIENT_RETRIES:
+                raise
+            headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+            try:
+                retry_after = float(headers.get("retry-after", ""))
+            except (TypeError, ValueError):
+                retry_after = 0
+            delay = min(30.0, retry_after) if retry_after > 0 else 2 ** (attempt + 1)
+            time.sleep(delay)
+
+
 def evaluate(case: dict, output: dict, criteria: list[str] | None = None) -> Verdict:
     """Оцінити відповідь системи суддею за критеріями `criteria` (типово
     — уся рубрика). Повертає `Verdict`; якщо суддя не відповів за схемою
@@ -240,23 +274,11 @@ def evaluate(case: dict, output: dict, criteria: list[str] | None = None) -> Ver
     response_format = schema_format
 
     try:
-        completion = client.chat.completions.create(
-            model=JUDGE_MODEL,
-            messages=messages,
-            temperature=0,
-            max_tokens=1200,
-            response_format=response_format,
-        )
+        completion = _create_completion(client, messages, response_format)
     except openai.BadRequestError:
         # Деякі OpenAI-сумісні провайдери підтримують лише режим JSON-об'єкта.
         response_format = {"type": "json_object"}
-        completion = client.chat.completions.create(
-            model=JUDGE_MODEL,
-            messages=messages,
-            temperature=0,
-            max_tokens=1200,
-            response_format=response_format,
-        )
+        completion = _create_completion(client, messages, response_format)
 
     def response_text(result) -> str:
         choices = getattr(result, "choices", None) or []

@@ -31,8 +31,9 @@ from pathlib import Path
 
 NAME = "agent"
 
-_default_dir = Path(__file__).resolve().parents[3] / "pr8"
-APP_DIR = Path(os.getenv("AGENT_APP_DIR") or _default_dir).resolve()
+PR12_DIR = Path(__file__).resolve().parents[2]
+_app_dir = Path(os.getenv("AGENT_APP_DIR") or PR12_DIR.parent / "pr8")
+APP_DIR = (_app_dir if _app_dir.is_absolute() else PR12_DIR / _app_dir).resolve()
 
 _app: types.SimpleNamespace | None = None
 
@@ -93,10 +94,15 @@ def run(case: dict) -> dict:
 
     calls = [_as_dict(c) for c in (getattr(answer, "calls", None) or [])]
     elapsed = getattr(answer, "elapsed", None)
+    stopped = getattr(answer, "stopped", None)
+    status = "ok" if stopped == "answer" else "error"
     return {
         "text": getattr(answer, "text", None),
-        "status": "ok",
-        "error": None,
+        "status": status,
+        "error": None if status == "ok" else {
+            "kind": stopped or "incomplete",
+            "message": getattr(answer, "text", "") or "",
+        },
         "calls": calls,
         "system_prompt": _system_prompt(),
         "provider": "openai",
@@ -104,7 +110,7 @@ def run(case: dict) -> dict:
         "usage": getattr(answer, "usage", None),
         "cost": None,
         "rounds": getattr(answer, "rounds", None),
-        "stopped": getattr(answer, "stopped", None),
+        "stopped": stopped,
         "elapsed_by_kind": elapsed if isinstance(elapsed, dict) else None,
         "elapsed": round(time.perf_counter() - started, 3),
     }

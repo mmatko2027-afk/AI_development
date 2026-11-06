@@ -67,6 +67,44 @@ def case_status(rows: list[dict]) -> str:
     return "fail"
 
 
+def is_infrastructure_failure(result: dict) -> bool:
+    """Чи провалилася спроба через тимчасову помилку провайдера/API."""
+    error = result.get("output", {}).get("error") or {}
+    if error.get("kind") in {"rate_limit", "timeout", "network", "connection", "unavailable", "model_error"}:
+        return True
+    transient_markers = (
+        "temporarily unavailable",
+        "тимчасово недоступ",
+        "timeout",
+        "timed out",
+        "rate limit",
+        "429",
+        "503",
+        "connection",
+        "network",
+    )
+    if any(
+        call.get("status") == "error"
+        and any(marker in str(call.get("reason") or "").lower() for marker in transient_markers)
+        for call in result.get("output", {}).get("calls", [])
+    ):
+        return True
+
+    retryable_api_errors = (
+        "RateLimitError",
+        "APITimeoutError",
+        "APIConnectionError",
+        "InternalServerError",
+        "NotFoundError",
+    )
+    return any(
+        check.get("name") == "judge"
+        and not check.get("passed")
+        and any(marker in check.get("detail", "") for marker in retryable_api_errors)
+        for check in result.get("checks", [])
+    )
+
+
 def summarize(run: dict) -> dict:
     """Зведення за видами й разом: прикладів, pass^k, pass@k, спроб,
     токенів на спробу, вартість, тривалість."""
@@ -90,6 +128,7 @@ def summarize(run: dict) -> dict:
             "attempts": len(rows),
             "attempts_passed": sum(1 for r in rows if r["passed"]),
             "errors": sum(1 for r in rows if r["output"].get("status") != "ok"),
+            "infrastructure_errors": sum(1 for r in rows if is_infrastructure_failure(r)),
             "tokens_avg": round(sum(tokens) / len(tokens)) if tokens else None,
             "cost_total": round(sum(costs), 6) if costs else None,
             "elapsed_p50": percentile(elapsed, 0.5),
@@ -99,13 +138,17 @@ def summarize(run: dict) -> dict:
 
 def print_summary(summary: dict, k: int) -> None:
     print(f"\n{'вид':<13}{'прикл.':>7}{'pass^k':>8}{'pass@k':>8}{'спроб':>12}{'збоїв':>7}"
-          f"{'ток./спр.':>11}{'вартість, $':>13}{'час p50, с':>12}")
+          f"{'інфра':>7}{'ток./спр.':>11}{'вартість, $':>13}{'час p50, с':>12}")
     for kind, s in summary.items():
         attempts = f"{s['attempts_passed']}/{s['attempts']}"
         print(f"{kind:<13}{s['cases']:>7}{s['pass_all']:>8}{s['pass_any']:>8}{attempts:>12}"
-              f"{s['errors']:>7}{fmt(s['tokens_avg']):>11}{fmt(s['cost_total'], 6):>13}"
+              f"{s['errors']:>7}{s['infrastructure_errors']:>7}{fmt(s['tokens_avg']):>11}"
+              f"{fmt(s['cost_total'], 6):>13}"
               f"{fmt(s['elapsed_p50']):>12}")
     print(f"(k = {k}: pass^k — усі k спроб пройшли; pass@k — хоч одна)")
+    if any(s["infrastructure_errors"] for s in summary.values()):
+        print("увага: інфраструктурні помилки враховані як непройдені спроби; "
+              "не використовуйте ці pass-метрики як чисту оцінку якості")
 
 
 def failed_rows(run: dict) -> list[tuple[dict, list[dict]]]:
@@ -132,4 +175,4 @@ def print_failed(run: dict, limit: int | None = None) -> None:
         print(f"  … і ще {len(rows) - limit}")
     counter = Counter(c["name"] for _, checks in rows for c in checks)
     print("перевірки, що провалювалися найчастіше: "
-          + ", ".join(f"{name} ×{n}" for name, n in counter.most_common(6)))
+          + ", ".join(f"{name} x{n}" for name, n in counter.most_common(6)))

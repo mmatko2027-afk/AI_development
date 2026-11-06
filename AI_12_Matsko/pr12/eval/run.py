@@ -23,6 +23,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import math
 import platform
 import sys
 import time
@@ -40,6 +41,7 @@ load_dotenv(PR_DIR / ".env")
 sys.path.insert(0, str(HERE))
 
 import checks  # noqa: E402
+import judge as judge_module  # noqa: E402
 import report  # noqa: E402
 import targets  # noqa: E402
 
@@ -93,9 +95,16 @@ def main() -> int:
     parser.add_argument("--ids", help="лише ці приклади, через кому")
     parser.add_argument("--kinds", help="лише ці види, через кому")
     parser.add_argument("--no-judge", action="store_true", help="пропустити перевірки судді")
+    parser.add_argument("--delay-seconds", type=float, default=0,
+                        help="пауза між спробами, щоб зменшити ризик rate limit")
     parser.add_argument("--label", default="", help="позначка прогону: що це за конфігурація")
     parser.add_argument("--out", help="куди записати результат; типово eval/runs/<функція>-<час>.json")
     args = parser.parse_args()
+
+    if args.k < 1:
+        parser.error("--k має бути не менше 1")
+    if not math.isfinite(args.delay_seconds) or args.delay_seconds < 0:
+        parser.error("--delay-seconds має бути невід'ємним числом")
 
     cases_path = Path(args.cases)
     cases = load_cases(cases_path)
@@ -115,13 +124,23 @@ def main() -> int:
         raise SystemExit(f"функція ще заготовка: {exc}") from exc
 
     skip = ("judge",) if args.no_judge else ()
+    judge_model = None
+    if not args.no_judge:
+        judge_config = judge_module.settings()
+        if not judge_config["configured"]:
+            raise SystemExit("суддя не налаштований: перевірте JUDGE_BASE_URL, JUDGE_API_KEY і JUDGE_MODEL")
+        judge_model = judge_config["model"]
+        if judge_model == config.get("model"):
+            raise SystemExit("модель-суддя має відрізнятися від моделі, яку оцінюємо")
+
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path = Path(args.out) if args.out else HERE / "runs" / f"{args.target}-{stamp}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"функція: {args.target}; модель: {config.get('model')}; провайдер: {config.get('provider')}; "
           f"версія prompt: {config.get('prompt_version')}; k = {args.k}; прикладів: {len(cases)}"
-          + (f"; позначка: {args.label}" if args.label else ""))
+          + (f"; позначка: {args.label}" if args.label else "")
+          + (f"; пауза: {args.delay_seconds:g} с" if args.delay_seconds else ""))
     print(f"набір: {cases_path} ({file_sha256(cases_path)})\n")
 
     results: list[dict] = []
@@ -151,6 +170,8 @@ def main() -> int:
                 why = "" if passed else "; ".join(f"{v.name}: {v.detail}" for v in verdicts if not v.passed)
                 print(f"{case['id']:<6} {case['kind']:<12} {attempt}/{args.k}  {mark}  "
                       f"{report.fmt(output.get('elapsed'), 1):>5} с  {report.fmt(tokens):>5} ток  {why[:110]}")
+                if args.delay_seconds and len(results) < len(cases) * args.k:
+                    time.sleep(args.delay_seconds)
     except KeyboardInterrupt:
         print("\nперервано; зберігаю те, що є")
 
@@ -164,6 +185,8 @@ def main() -> int:
             "cases_sha256": file_sha256(cases_path),
             "k": args.k,
             "judge": not args.no_judge,
+            "judge_model": judge_model,
+            "delay_seconds": args.delay_seconds,
             "filters": {"ids": args.ids, "kinds": args.kinds},
             "python": platform.python_version(),
             "duration_s": round(time.perf_counter() - started_all, 1),
@@ -173,10 +196,9 @@ def main() -> int:
         "results": results,
     }
     run["summary"] = report.summarize(run)
+    out_path.write_text(json.dumps(run, ensure_ascii=False, indent=1), encoding="utf-8")
     report.print_summary(run["summary"], args.k)
     report.print_failed(run, limit=30)
-
-    out_path.write_text(json.dumps(run, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\nзаписано {out_path}  ({run['meta']['duration_s']} с)")
     return 0
 

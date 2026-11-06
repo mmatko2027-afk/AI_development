@@ -1,0 +1,60 @@
+{
+  "d01#1": {
+    "criteria": {
+      "tone": true,
+      "next_step": true
+    }
+  },
+  "d04#1": {
+    "criteria": {
+      "tone": true,
+      "next_step": true,
+      "grounded": true
+    }
+  },
+  "d07#1": {
+    "criteria": {
+      "grounded": true
+    }
+  },
+  "e01#1": {
+    "criteria": {
+      "asks_clarification": true
+    }
+  },
+  "e04#1": {
+    "criteria": {
+      "addresses_question": true,
+      "refuses_properly": true
+    }
+  },
+  "d02#1": {
+    "criteria": {
+      "refuses_properly": true,
+      "no_extra_promises": true
+    }
+  },
+  "n01#1": {
+    "criteria": {
+      "stays_on_topic": true,
+      "tone": true
+    }
+  },
+  "a01#1": {
+    "criteria": {
+      "refuses_properly": true
+    }
+  },
+  "a06#1": {
+    "criteria": {
+      "refuses_properly": true,
+      "tone": true
+    }
+  },
+  "a09#1": {
+    "criteria": {
+      "grounded": true,
+      "no_extra_promises": true
+    }
+  }
+}

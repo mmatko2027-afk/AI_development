@@ -83,8 +83,8 @@ def check_settings() -> bool:
 
 
 def _app_dir(name: str, default: str) -> Path:
-    value = os.getenv(name)
-    return (Path(value) if value else HERE.parent / default).resolve()
+    value = Path(os.getenv(name) or HERE.parent / default)
+    return (value if value.is_absolute() else HERE / value).resolve()
 
 
 def check_app(label: str, env_name: str, default: str, files: tuple[str, ...]) -> bool:
