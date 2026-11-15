@@ -20,8 +20,7 @@ HTTP-статусом.
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
-
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
