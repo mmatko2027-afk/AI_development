@@ -24,6 +24,7 @@ import os
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
+from threading import Lock
 
 from dotenv import load_dotenv
 
@@ -32,6 +33,7 @@ from .state import Run, Step
 load_dotenv()
 
 RUNS_DIR = Path(os.getenv("RUNS_DIR", "runs"))
+_CLAIM_LOCK = Lock()
 
 def _get_path(run_id: str) -> Path:
     """Повернути шлях до файлу звернення."""
@@ -87,6 +89,24 @@ def load(run_id: str) -> Run | None:
     ]
 
     return Run(**data)
+
+
+def claim(run_id: str) -> Run | None:
+    """Атомарно захопити звернення, яке очікує підтвердження."""
+    with _CLAIM_LOCK:
+        run = load(run_id)
+
+        if (
+            run is None
+            or run.status != "awaiting_approval"
+            or not run.pending
+            or run.pending.get("state") != "awaiting_approval"
+        ):
+            return None
+
+        run.pending["state"] = "executing"
+        save(run)
+        return run
 
 
 def list_runs(status: str | None = None) -> list[Run]:

@@ -21,7 +21,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -130,16 +130,22 @@ def api_runs(status: str | None = None) -> list[dict]:
 
 @app.get("/api/runs/{run_id}")
 def api_run(run_id: str) -> dict:
-    """Стан одного звернення. Невідомий номер поки що дає 500."""
-    return run_to_dict(store.load(run_id))
+    """Стан одного звернення."""
+    run = store.load(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Звернення не знайдено.")
+    return run_to_dict(run)
 
 
 @app.post("/api/runs/{run_id}/decision")
 def api_decision(run_id: str, payload: DecisionIn) -> dict:
     """Рішення оператора: підтвердити чи відхилити дію.
 
-    Що робити з рішенням щодо звернення, яке не чекає підтвердження,
-    уже підтверджене чи не існує, — вирішують workflow і цей ендпоінт.
-    Поки що будь-який збій — 500.
+    Звернення, яке вже обробляється або не чекає підтвердження, повертає
+    поточний стан; невідомий номер — 404.
     """
-    return run_to_dict(workflow.resume(run_id, payload.approve, payload.comment))
+    try:
+        run = workflow.resume(run_id, payload.approve, payload.comment)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return run_to_dict(run)

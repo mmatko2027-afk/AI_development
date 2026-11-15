@@ -491,17 +491,15 @@ def resume(run_id: str, approve: bool, comment: str = "") -> Run:
     """Продовжити звернення після рішення оператора.
 
     Викликається, можливо, через години й після перезапуску застосунку —
-    і, можливо, двічі для того самого звернення.
+    тому сховище атомарно захоплює дію перед виконанням, щоб повторне
+    підтвердження не виконало її вдруге.
     """
-    run = store.load(run_id)
+    run = store.claim(run_id)
 
     if run is None:
-        raise ValueError("Звернення не знайдено.")
-
-    if run.status != "awaiting_approval" or not run.pending:
-        return run
-
-    if run.pending.get("state") != "awaiting_approval":
+        run = store.load(run_id)
+        if run is None:
+            raise ValueError("Звернення не знайдено.")
         return run
 
     if not approve:
@@ -525,7 +523,6 @@ def resume(run_id: str, approve: bool, comment: str = "") -> Run:
             "Невідомий інструмент у pending.",
         )
 
-    run.pending["state"] = "executing"
     run.pending["operator_comment"] = comment
     _save(run)
 
