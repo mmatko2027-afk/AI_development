@@ -161,10 +161,8 @@ def api_ask(payload: AskRequest) -> dict:
         ) from exc
 
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Виникла внутрішня помилка "
-                f"застосунку: {exc}"
-            ),
-        ) from exc
+    print(f"Internal error: {exc}")
+    raise HTTPException(
+        status_code=500,
+        detail="Виникла внутрішня помилка застосунку.",
+    ) from exc
