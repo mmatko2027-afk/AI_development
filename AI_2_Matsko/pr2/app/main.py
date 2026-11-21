@@ -44,7 +44,7 @@ async def api_detect(image: UploadFile = File(...)):
     content = await image.read()
 
     try:
-        return detector.detect(content, confidence=0.75)
+        return detector.detect(content, confidence=0.5)
 
     except detector.DetectionError as e:
         raise HTTPException(

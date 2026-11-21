@@ -17,61 +17,59 @@
 Довідка про модель: https://docs.ultralytics.com/
 """
 
+
+"""Module for object detection using YOLO."""
+
 import io
 import time
-from xml.parsers.expat import model
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from ultralytics import YOLO
 
 
 WEIGHTS = "yolov8n.pt"
-DEFAULT_CONFIDENCE = 0.50
+DEFAULT_CONFIDENCE = 0.5
 
 
 class DetectionError(Exception):
-    """Помилка детекції, зрозуміла веб-рівню.
+    """Error during image detection."""
 
-    Заготовка. Вирішіть, чи достатньо одного типу помилки, чи їх варто
-    розрізняти — некоректний файл, збій моделі, — і що з цього має
-    побачити користувач.
-    """
+
 _model = None
 
-def load_model():
-    """Повернути готову до роботи модель.
 
-    Завантаження ваг коштує дорого. Подумайте, як зробити так, щоб воно
-    відбулося один раз за час життя застосунку.
-    """
+def load_model():
+    """Load YOLO model only once."""
     global _model
+
     if _model is None:
         _model = YOLO(WEIGHTS)
+
     return _model
 
 
 def detect(image_bytes: bytes, confidence: float = DEFAULT_CONFIDENCE):
-    """Знайти обʼєкти на зображенні.
+    """Detect objects in an image and return structured results."""
 
-    Приймає байти завантаженого файлу, повертає структурований результат:
-    для кожного знайденого обʼєкта — клас, рамку й упевненість, а також
-    їхню кількість і час виконання. Точний склад полів — ваше рішення.
-    """
     if not image_bytes:
         raise DetectionError("Файл порожній")
-
-    try:
-        image = Image.open(io.BytesIO(image_bytes))
-        image.load()
-    except (UnidentifiedImageError, OSError):
-        raise DetectionError("Завантажений файл не є зображенням")
 
     if not 0 <= confidence <= 1:
         raise DetectionError(
             "Поріг упевненості має бути від 0 до 1"
         )
 
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image = ImageOps.exif_transpose(image)
+        image = image.convert("RGB")
+        image.load()
+
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise DetectionError("Завантажений файл не є зображенням")
+
     detector = load_model()
+
     start_time = time.perf_counter()
 
     results = detector.predict(
@@ -109,3 +107,4 @@ def detect(image_bytes: bytes, confidence: float = DEFAULT_CONFIDENCE):
         "inference_time_ms": round(elapsed, 2),
         "detections": detections,
     }
+
