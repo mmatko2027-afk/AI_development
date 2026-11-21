@@ -33,7 +33,7 @@ from .documents import Chunk
 from .index import Hit, SearchIndex, search
 from .keyword import KeywordIndex
 from .embeddings import embed_query
-
+from .embeddings import MODEL_NAME
 load_dotenv()
 
 # Скільки фрагментів іде в контекст моделі й скільки токенів на них є.
@@ -77,6 +77,13 @@ def retrieve(
     коректний результат: він означає «у базі знань про це немає», і що
     робити далі, вирішує `app/rag.py`.
     """
+    if index.model_name != MODEL_NAME:
+        raise ValueError(
+            f"Індекс побудовано моделлю {index.model_name}, "
+            f"а зараз задано {MODEL_NAME}. "
+            "Перебудуйте індекс: python ingest.py"
+        )
+
     if index is None:
         raise ValueError("Індекс не завантажено.")
 
@@ -130,7 +137,7 @@ def build_context(hits: list[Hit], budget: int = CONTEXT_BUDGET) -> tuple[str, l
         chunk = hit.chunk
 
         title = chunk.metadata.get("title", chunk.source)
-        section = chunk.metadata.get("section", "без розділу")
+        section = chunk.metadata.get("section") or "без розділу"
         updated = chunk.metadata.get("updated", "дата не вказана")
 
         part = (

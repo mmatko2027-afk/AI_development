@@ -88,6 +88,7 @@ def validate(raw: str) -> dict:
         raise ValueError(
             f"Відповідь моделі не відповідає схемі: {exc.message}"
         ) from exc
-
+    if not data["answer"].strip():
+        raise ValueError("Відповідь моделі не може бути порожньою.")
     return data
     

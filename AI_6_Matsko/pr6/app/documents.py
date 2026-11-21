@@ -129,65 +129,59 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
         ]
         current_text = ""
         for paragraph in paragraphs:
-            if current_text:
+            if len(paragraph) > CHUNK_SIZE:
+                if current_text:
+                    chunks.append(
+                        Chunk(
+                            text=current_text,
+                            source=source,
+                            metadata={**metadata, "section": section_title},
+                        )
+                    )
+                    current_text = ""
+                start = 0
+                step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
+                while start < len(paragraph):
+                    end = start + CHUNK_SIZE
+                    part = paragraph[start:end].strip()
+                    if part:
+                        chunks.append(
+                            Chunk(
+                                text=part,
+                                source=source,
+                                metadata={**metadata, "section": section_title},
+                            )
+                        )
+                    if end >= len(paragraph):
+                        break
+                    start += step
+                continue
+
+            if not current_text:
+                current_text = paragraph
+            elif len(current_text) + len(paragraph) + 2 <= CHUNK_SIZE:
+                current_text += "\n\n" + paragraph
+            else:
                 chunks.append(
                     Chunk(
                         text=current_text,
                         source=source,
-                        metadata={
-                            **metadata,
-                            "section": section_title
-                        },
+                        metadata={**metadata, "section": section_title},
                     )
                 )
-                current_text = ""
-            start = 0
-            while start < len(paragraph):
-                end = start + CHUNK_SIZE
-                part = paragraph[start:end].strip()
-                if part:
-                    chunks.append(
-                        Chunk(
-                            text=part,
-                            source=source,
-                            metadata={
-                                **metadata,
-                                "section": section_title
-                            },
-                        )
-                    )
-                start = end - CHUNK_OVERLAP
-                if start < 0:
-                    start = 0
-            continue
-        if not current_text:
-            current_text = paragraph
-        elif (len(current_text) + len(paragraph) + 1 <= CHUNK_SIZE):
-            current_text += "\n\n" + paragraph
-        else:
+                overlap = current_text[-CHUNK_OVERLAP:] if CHUNK_OVERLAP > 0 else ""
+                current_text = overlap + "\n\n" + paragraph if overlap else paragraph
+                if len(current_text) > CHUNK_SIZE:
+                    current_text = paragraph
+
+        if current_text:
             chunks.append(
                 Chunk(
                     text=current_text,
                     source=source,
-                    metadata={
-                        **metadata,
-                        "section": section_title
-                    },
+                    metadata={**metadata, "section": section_title},
                 )
             )
-            overlap = current_text[-CHUNK_OVERLAP:]
-            current_text = overlap + "\n\n" + paragraph
-    if current_text:
-        chunks.append(
-            Chunk(
-                text=current_text,
-                source=source,
-                metadata={
-                    **metadata,
-                    "section": section_title
-                },
-            )
-        )
 
     return chunks
 

@@ -118,7 +118,7 @@ def answer(
             ),
             found=False,
             sources=[],
-            retrieved=hits,
+            retrieved=[],
             model=None,
             elapsed={
                 "retrieval": round(retrieval_time, 3),
@@ -158,17 +158,24 @@ def answer(
 
     found = bool(result.get("found", False))
 
+    found = bool(result.get("found", False))
+    answer_text = result["answer"]
+
     if found and not selected_sources:
         found = False
+        answer_text = (
+            "У базі знань немає достатньої інформації "
+            "для відповіді на це питання."
+        )
 
     if not found:
         selected_sources = []
 
     return Answer(
-        text=result["answer"],
+        text=answer_text,
         found=found,
         sources=selected_sources,
-        retrieved=hits,
+        retrieved=[Hit(chunk=s.chunk, score=s.score) for s in sources],
         model=result.get("model"),
         elapsed={
             "retrieval": round(retrieval_time, 3),
