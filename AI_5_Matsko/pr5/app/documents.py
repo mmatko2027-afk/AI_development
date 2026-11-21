@@ -66,6 +66,65 @@ def parse_front_matter(raw: str) -> tuple[dict, str]:
     return {}, raw
 
 
+
+def get_overlap(text: str, max_length: int) -> str:
+    """Get the last complete words within the overlap limit."""
+
+    if max_length <= 0:
+        return ""
+
+    words = text.split()
+    overlap_words = []
+    current_length = 0
+
+    for word in reversed(words):
+        added_length = len(word)
+
+        if overlap_words:
+            added_length += 1
+
+        if current_length + added_length > max_length:
+            break
+
+        overlap_words.insert(0, word)
+        current_length += added_length
+
+    return " ".join(overlap_words)
+
+
+def split_long_paragraph(paragraph: str) -> list[str]:
+    """Split a long paragraph without breaking words."""
+
+    words = paragraph.split()
+    parts = []
+    current_words = []
+
+    overlap_size = max(
+        0,
+        min(CHUNK_OVERLAP, CHUNK_SIZE - 1)
+    )
+
+    for word in words:
+        candidate = " ".join(current_words + [word])
+
+        if current_words and len(candidate) > CHUNK_SIZE:
+            parts.append(" ".join(current_words))
+
+            overlap = get_overlap(
+                " ".join(current_words),
+                overlap_size
+            )
+
+            current_words = overlap.split()
+
+        current_words.append(word)
+
+    if current_words:
+        parts.append(" ".join(current_words))
+
+    return parts
+
+
 def load_documents(docs_dir: Path = DOCS_DIR) -> list[tuple[str, dict, str]]:
     """Прочитати всі документи колекції.
 
@@ -100,14 +159,24 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
     усе, що довше, вона мовчки обріже.
     """
     text = text.strip()
+
     if not text:
         return []
+
     chunks = []
     sections = text.split("\n## ")
+
+    overlap_size = max(
+        0,
+        min(CHUNK_OVERLAP, CHUNK_SIZE - 1)
+    )
+
     for section_number, section in enumerate(sections):
         section = section.strip()
+
         if not section:
             continue
+
         if section_number > 0:
             lines = section.splitlines()
             section_title = lines[0].strip()
@@ -115,66 +184,88 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
         else:
             section_title = ""
             section_body = section
+
         if not section_body:
             continue
+
         paragraphs = [
             paragraph.strip()
             for paragraph in section_body.split("\n\n")
             if paragraph.strip()
         ]
-        chunk_metadata = {**metadata, "section": section_title}
+
+        chunk_metadata = {
+            **metadata,
+            "section": section_title
+        }
+
         current_text = ""
+
         for paragraph in paragraphs:
+
             if len(paragraph) > CHUNK_SIZE:
                 if current_text:
                     chunks.append(
                         Chunk(
                             text=current_text,
                             source=source,
-                            metadata=chunk_metadata,
+                            metadata=chunk_metadata
                         )
                     )
                     current_text = ""
-                step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
-                for start in range(0, len(paragraph), step):
-                    part = paragraph[start:start + CHUNK_SIZE].strip()
-                    if part:
-                        chunks.append(
-                            Chunk(
-                                text=part,
-                                source=source,
-                                metadata=chunk_metadata,
-                            )
+
+                parts = split_long_paragraph(paragraph)
+
+                for part in parts:
+                    chunks.append(
+                        Chunk(
+                            text=part,
+                            source=source,
+                            metadata=chunk_metadata
                         )
+                    )
+
                 continue
+
             if not current_text:
                 current_text = paragraph
+
             elif len(current_text) + len(paragraph) + 2 <= CHUNK_SIZE:
                 current_text += "\n\n" + paragraph
+
             else:
                 chunks.append(
                     Chunk(
                         text=current_text,
                         source=source,
-                        metadata=chunk_metadata,
+                        metadata=chunk_metadata
                     )
                 )
-                overlap = current_text[-CHUNK_OVERLAP:] if CHUNK_OVERLAP else ""
-                current_text = (
-                    overlap + "\n\n" + paragraph if overlap else paragraph
+
+                overlap = get_overlap(
+                    current_text,
+                    overlap_size
                 )
+
+                if overlap:
+                    current_text = overlap + "\n\n" + paragraph
+                else:
+                    current_text = paragraph
+
                 if len(current_text) > CHUNK_SIZE:
                     current_text = paragraph
+
         if current_text:
             chunks.append(
                 Chunk(
                     text=current_text,
                     source=source,
-                    metadata=chunk_metadata,
+                    metadata=chunk_metadata
                 )
             )
 
     return chunks
+
 
 
 def load_chunks(docs_dir: Path = DOCS_DIR) -> list[Chunk]:

@@ -25,19 +25,14 @@ from pydantic import BaseModel
 
 from . import embeddings, index, keyword
 
+
 app = FastAPI(title="Пошук у базі знань — ПР5")
 
 INDEX_PAGE = Path(__file__).parent / "templates" / "index.html"
 
 
 class SearchRequest(BaseModel):
-    """Те, що надсилає сторінка.
-
-    `mode` — `semantic`, `keyword` або `both`. `filters` — умови на
-    метадані фрагментів, наприклад `{"category": "інструкція"}`; порожній
-    словник означає «без фільтрів». `threshold` — поріг схожості для
-    семантичного пошуку; `None` — узяти значення з конфігурації.
-    """
+    """Data sent by the search page."""
 
     query: str
     mode: str = "both"
@@ -47,7 +42,8 @@ class SearchRequest(BaseModel):
 
 
 def hit_to_dict(hit: index.Hit) -> dict:
-    """Перетворити влучення на те, що піде на сторінку."""
+    """Convert a search hit into a dictionary."""
+
     return {
         "score": hit.score,
         "text": hit.chunk.text,
@@ -58,41 +54,56 @@ def hit_to_dict(hit: index.Hit) -> dict:
 
 @app.on_event("startup")
 def load_indexes() -> None:
-    """Прочитати збудований індекс і зібрати індекс за словами з тих
-    самих фрагментів.
+    """Load the vector index and build the keyword index."""
 
-    Якщо індексу на диску немає, застосунок усе одно стартує: сторінка
-    має відкритися й пояснити, що робити. Як саме повідомити про це
-    користувачеві — вирішуєте ви; каркас лише лишає `app.state.index`
-    порожнім.
-    """
     app.state.index = None
     app.state.keyword_index = None
+
     try:
         app.state.index = index.load()
-    except Exception as exc:  # noqa: BLE001 — старт не має падати без індексу
-        print(f"Індекс не завантажено: {type(exc).__name__}: {exc}")
+
+    except Exception as exc:
+        print(
+            f"Індекс не завантажено: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return
-    app.state.keyword_index = keyword.build(app.state.index.chunks)
+
+    app.state.keyword_index = keyword.build(
+        app.state.index.chunks
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
 def page() -> str:
-    """Віддати сторінку пошуку."""
+    """Return the search page."""
+
+    if not INDEX_PAGE.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail="Файл сторінки пошуку не знайдено."
+        )
+
     return INDEX_PAGE.read_text(encoding="utf-8")
 
 
 @app.get("/api/status")
 def api_status() -> dict:
-    """Стан індексу: чи збудовано, скільки фрагментів, якою моделлю.
+    """Return the index status."""
 
-    Сторінка викликає це при відкритті, щоб показати підказку, якщо
-    індексу ще немає.
-    """
     idx = app.state.index
+
     if idx is None:
-        return {"ready": False, "hint": "індекс не збудовано — виконайте python ingest.py"}
-    sources = {chunk.source for chunk in idx.chunks}
+        return {
+            "ready": False,
+            "hint": "індекс не збудовано — виконайте python ingest.py"
+        }
+
+    sources = {
+        chunk.source
+        for chunk in idx.chunks
+    }
+
     return {
         "ready": True,
         "chunks": len(idx),
@@ -103,15 +114,8 @@ def api_status() -> dict:
 
 @app.post("/api/search")
 def api_search(payload: SearchRequest) -> dict:
-    """Виконати пошук і повернути влучення обох способів.
+    """Perform semantic and keyword search."""
 
-    Сторінка очікує обʼєкт із полями `semantic` і `keyword` (список
-    влучень або `null`, якщо спосіб не запитували) та `elapsed` — час
-    кожного способу в секундах.
-
-    Некоректні запити повертають зрозумілий клієнтський статус, а
-    непередбачені помилки пошуку залишаються помилками сервера.
-    """
     if not payload.query.strip():
         raise HTTPException(
             status_code=400,
@@ -131,35 +135,92 @@ def api_search(payload: SearchRequest) -> dict:
         )
 
     idx = app.state.index
-    result: dict = {"query": payload.query, "semantic": None, "keyword": None, "elapsed": {}}
+
+    if (
+        payload.mode in ("semantic", "both")
+        and idx.model_name != embeddings.MODEL_NAME
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Модель ембедінгів не відповідає моделі індексу. "
+                "Перебудуйте індекс командою python ingest.py."
+            )
+        )
+
+    result = {
+        "query": payload.query,
+        "semantic": None,
+        "keyword": None,
+        "elapsed": {}
+    }
 
     if payload.mode in ("semantic", "both"):
         started = time.perf_counter()
-        vector = embeddings.embed_query(payload.query)
+
         try:
+            vector = embeddings.embed_query(
+                payload.query
+            )
+
             hits = index.search(
-                idx, vector,
+                idx,
+                vector,
                 top_k=payload.top_k,
                 filters=payload.filters or None,
-                threshold=payload.threshold if payload.threshold is not None
-                else index.SIMILARITY_THRESHOLD,
+                threshold=(
+                    payload.threshold
+                    if payload.threshold is not None
+                    else index.SIMILARITY_THRESHOLD
+                ),
             )
+
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        result["elapsed"]["semantic"] = time.perf_counter() - started
-        result["semantic"] = [hit_to_dict(h) for h in hits]
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc)
+            ) from exc
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Не вдалося створити вектор пошукового запиту."
+            ) from exc
+
+        result["elapsed"]["semantic"] = (
+            time.perf_counter() - started
+        )
+
+        result["semantic"] = [
+            hit_to_dict(hit)
+            for hit in hits
+        ]
 
     if payload.mode in ("keyword", "both"):
         started = time.perf_counter()
+
         try:
             hits = keyword.search(
-                app.state.keyword_index, payload.query,
+                app.state.keyword_index,
+                payload.query,
                 top_k=payload.top_k,
                 filters=payload.filters or None,
             )
+
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        result["elapsed"]["keyword"] = time.perf_counter() - started
-        result["keyword"] = [hit_to_dict(h) for h in hits]
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc)
+            ) from exc
+
+        result["elapsed"]["keyword"] = (
+            time.perf_counter() - started
+        )
+
+        result["keyword"] = [
+            hit_to_dict(hit)
+            for hit in hits
+        ]
 
     return result
+

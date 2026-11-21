@@ -33,7 +33,6 @@ import numpy as np
 from dotenv import load_dotenv
 
 from app.documents import Chunk
-from app.embeddings import embed_query
 
 load_dotenv()
 
