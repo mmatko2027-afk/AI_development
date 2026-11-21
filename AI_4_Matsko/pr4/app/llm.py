@@ -167,7 +167,7 @@ def estimate_tokens(text: str) -> int:
     відкалібруйте.
     """
     return max(1, len(text) // 3)
-    raise NotImplementedError("estimate_tokens ще не реалізовано")
+   
 
 
 def fit_budget(history: list[dict], budget: int) -> list[dict]:
@@ -368,8 +368,6 @@ def ask(message: str, history: list[dict], context: str) -> dict:
     result = None
     last_error = None
 
-    # Спочатку просимо відповідь за схемою.
-    # Якщо модель повертає не JSON, повторюємо без схеми.
     for use_schema in [True, False]:
         try:
             response = call_model(
@@ -400,16 +398,12 @@ def ask(message: str, history: list[dict], context: str) -> dict:
                 error
             )
 
-            # Якщо це була друга спроба,
-            # більше повторювати не потрібно.
             if not use_schema:
                 raise LLMError(
                     f"Модель повернула неправильну відповідь: {error}",
                     status_code=502
                 ) from error
 
-            # Перша відповідь була не JSON.
-            # Цикл повторить запит без response_format.
             continue
 
         except Exception as error:
@@ -469,7 +463,6 @@ def ask(message: str, history: list[dict], context: str) -> dict:
             status_code=502
         )
 
-    # Перевіряємо, чи модель не вигадала номер замовлення.
     known_numbers = find_client_order_numbers(
         message=message,
         history=history

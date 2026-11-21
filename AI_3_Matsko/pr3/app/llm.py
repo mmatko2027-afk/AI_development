@@ -169,22 +169,24 @@ def ask(question: str, context: str) -> dict:
     if response is None:
         raise LLMServiceError("Модель не відповіла.")
 
+    
     message = response.choices[0].message.content if response.choices else ""
     answer = (message or "").strip()
+
     if not answer:
         answer = NO_ANSWER_FALLBACK
     else:
         normalized = answer.lower()
-        if any(token in normalized for token in (
-            "немає відповіді",
-            "немає такого правила",
-            "не знайшов",
-            "не містить відповіді",
-            "не вказано",
-            "не описано",
-            "не знайдено",
-        )):
+
+        refusal_phrases = (
+            "у наших правилах немає відповіді",
+            "у правилах немає відповіді",
+            "не можу відповісти на це питання",
+        )
+
+        if any(normalized.startswith(phrase) for phrase in refusal_phrases):
             answer = NO_ANSWER_FALLBACK
+
     elapsed = time.perf_counter() - started
     usage = getattr(response, "usage", None)
     usage_data = None
