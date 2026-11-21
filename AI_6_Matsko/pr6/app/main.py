@@ -57,11 +57,19 @@ def answer_to_dict(result: rag.Answer) -> dict:
         "answer": result.text,
         "found": result.found,
         "sources": [
-            {"ref": s.ref, "score": s.score, "source": s.chunk.source,
-             "metadata": s.chunk.metadata, "text": s.chunk.text}
-            for s in result.sources
+            {
+                "ref": source.ref,
+                "score": source.score,
+                "source": source.chunk.source,
+                "metadata": source.chunk.metadata,
+                "text": source.chunk.text,
+            }
+            for source in result.sources
         ],
-        "retrieved": [hit_to_dict(h) for h in result.retrieved],
+        "retrieved": [
+            hit_to_dict(hit)
+            for hit in result.retrieved
+        ],
         "model": result.model,
         "elapsed": result.elapsed,
         "usage": result.usage,
@@ -89,28 +97,39 @@ def load_indexes() -> None:
 @app.get("/", response_class=HTMLResponse)
 def page() -> str:
     """Віддати сторінку помічника."""
-    if not INDEX_PAGE.exists():
-        return (
-            "<h1>Помічник за базою знань</h1>"
-            "<p>Файл templates/index.html не знайдено.</p>"
+    if not INDEX_PAGE.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail="Файл templates/index.html не знайдено.",
         )
-    return INDEX_PAGE.read_text(encoding="utf-8")
 
+    return INDEX_PAGE.read_text(encoding="utf-8")
 
 @app.get("/api/status")
 def api_status() -> dict:
     """Стан індексу: чи збудовано, скільки фрагментів, якою моделлю."""
     idx = app.state.index
+
     if idx is None:
-        return {"ready": False, "hint": "індекс не збудовано — виконайте python ingest.py"}
-    sources = {chunk.source for chunk in idx.chunks}
+        return {
+            "ready": False,
+            "hint": (
+                "Індекс не збудовано. "
+                "Виконайте python ingest.py"
+            ),
+        }
+
+    sources = {
+        chunk.source
+        for chunk in idx.chunks
+    }
+
     return {
         "ready": True,
-        "chunks": len(idx),
+        "chunks": len(idx.chunks),
         "documents": len(sources),
         "model": idx.model_name,
     }
-
 
 @app.post("/api/ask")
 def api_ask(payload: AskRequest) -> dict:
@@ -138,6 +157,7 @@ def api_ask(payload: AskRequest) -> dict:
                 "Спочатку виконайте python ingest.py"
             ),
         )
+
     try:
         result = rag.answer(
             question,
@@ -148,23 +168,25 @@ def api_ask(payload: AskRequest) -> dict:
 
         return answer_to_dict(result)
 
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
-
     except LLMError as exc:
         raise HTTPException(
             status_code=exc.status_code,
             detail=str(exc),
         ) from exc
 
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
+        print(
+            f"Помилка застосунку: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Виникла внутрішня помилка "
-                f"застосунку: {exc}"
-            ),
+            detail="Виникла внутрішня помилка застосунку.",
         ) from exc

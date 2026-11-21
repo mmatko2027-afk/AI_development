@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 from .documents import Chunk
 from .index import Hit, SearchIndex, search
-from .keyword import KeywordIndex
+from .keyword import KeywordIndex, search as keyword_search
 from .embeddings import embed_query
 from .embeddings import MODEL_NAME
 load_dotenv()
@@ -77,6 +77,9 @@ def retrieve(
     коректний результат: він означає «у базі знань про це немає», і що
     робити далі, вирішує `app/rag.py`.
     """
+    if index is None:
+        raise ValueError("Індекс не завантажено.")
+
     if index.model_name != MODEL_NAME:
         raise ValueError(
             f"Індекс побудовано моделлю {index.model_name}, "
@@ -84,13 +87,12 @@ def retrieve(
             "Перебудуйте індекс: python ingest.py"
         )
 
-    if index is None:
-        raise ValueError("Індекс не завантажено.")
-
     query = query.strip()
 
     if not query:
-        raise ValueError("Пошуковий запит не може бути порожнім.")
+        raise ValueError(
+            "Пошуковий запит не може бути порожнім."
+        )
 
     safe_filters = dict(filters or {})
 
@@ -99,16 +101,67 @@ def retrieve(
 
     search_top_k = max(CONTEXT_CHUNKS * 2, 8)
 
-    hits = search(
+    # Semantic search.
+    vector = embed_query(query)
+
+    semantic_hits = search(
         index,
-        query_vector=embed_query(query),
+        query_vector=vector,
         top_k=search_top_k,
         filters=safe_filters,
     )
 
-    hits = hits[:CONTEXT_CHUNKS]
+    keyword_hits = []
 
-    return hits
+    if keyword_index is not None:
+        keyword_hits = keyword_search(
+            keyword_index,
+            query,
+            top_k=search_top_k,
+            filters=safe_filters,
+        )
+
+    combined_hits = {}
+    combined_scores = {}
+
+    for rank, hit in enumerate(semantic_hits, start=1):
+        key = (hit.chunk.source, hit.chunk.text)
+
+        combined_hits[key] = hit
+        combined_scores[key] = (
+            combined_scores.get(key, 0)
+            + 1 / (60 + rank)
+        )
+
+    for rank, hit in enumerate(keyword_hits, start=1):
+        if hit.score <= 0:
+            continue
+
+        key = (hit.chunk.source, hit.chunk.text)
+
+        if key not in combined_hits:
+            combined_hits[key] = hit
+
+        combined_scores[key] = (
+            combined_scores.get(key, 0)
+            + 1 / (60 + rank)
+        )
+
+    sorted_keys = sorted(
+        combined_scores,
+        key=lambda key: combined_scores[key],
+        reverse=True
+    )
+
+    results = []
+
+    for key in sorted_keys:
+        results.append(combined_hits[key])
+
+        if len(results) >= CONTEXT_CHUNKS:
+            break
+
+    return results
 
 def build_context(hits: list[Hit], budget: int = CONTEXT_BUDGET) -> tuple[str, list[Source]]:
     """Зібрати з влучень текст контексту для моделі та перелік джерел.

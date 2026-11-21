@@ -38,7 +38,8 @@ def output_schema() -> dict:
         "type": "object",
         "properties": {
             "answer": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
             },
             "found": {
                 "type": "boolean"
@@ -48,7 +49,8 @@ def output_schema() -> dict:
                 "items": {
                     "type": "integer",
                     "minimum": 1
-                }
+                },
+                "uniqueItems": True
             }
         },
         "required": [
@@ -74,6 +76,7 @@ def validate(raw: str) -> dict:
     """
     try:
         data = json.loads(raw)
+
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Модель повернула неправильний JSON: {exc}"
@@ -84,11 +87,15 @@ def validate(raw: str) -> dict:
             instance=data,
             schema=output_schema()
         )
+
     except ValidationError as exc:
         raise ValueError(
             f"Відповідь моделі не відповідає схемі: {exc.message}"
         ) from exc
+
     if not data["answer"].strip():
-        raise ValueError("Відповідь моделі не може бути порожньою.")
+        raise ValueError(
+            "Відповідь моделі не може бути порожньою."
+        )
+
     return data
-    

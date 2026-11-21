@@ -143,8 +143,17 @@ def answer(
 
     model_sources = result.get("sources", [])
 
+    if not isinstance(model_sources, list):
+        raise llm.LLMError(
+            "Модель повернула неправильний формат джерел."
+        )
+
     for source_number in model_sources:
-        if source_number not in source_numbers:
+        if (
+            not isinstance(source_number, int)
+            or isinstance(source_number, bool)
+            or source_number not in source_numbers
+        ):
             raise llm.LLMError(
                 "Модель послалася на джерело, "
                 "якого не було в контексті."
@@ -156,10 +165,14 @@ def answer(
         if source.ref in model_sources:
             selected_sources.append(source)
 
-    found = bool(result.get("found", False))
+    answer_text = result.get("answer")
 
-    found = bool(result.get("found", False))
-    answer_text = result["answer"]
+    if not isinstance(answer_text, str) or not answer_text.strip():
+        raise llm.LLMError(
+            "Модель повернула порожню або неправильну відповідь."
+        )
+
+    found = result.get("found") is True
 
     if found and not selected_sources:
         found = False
@@ -175,7 +188,10 @@ def answer(
         text=answer_text,
         found=found,
         sources=selected_sources,
-        retrieved=[Hit(chunk=s.chunk, score=s.score) for s in sources],
+        retrieved=[
+            Hit(chunk=source.chunk, score=source.score)
+            for source in sources
+        ],
         model=result.get("model"),
         elapsed={
             "retrieval": round(retrieval_time, 3),
