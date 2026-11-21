@@ -3,22 +3,14 @@
 from pathlib import Path
 
 from app import extraction
-
+from app import extraction, images, llm
 
 SAMPLES_DIR = Path("samples")
 
 
 def main():
 
-    folders = [
-        "clean",
-        "blur",
-        "crop",
-        "faded",
-        "jpeg",
-        "lowres",
-        "photo",
-    ]
+    folders = ["clean", "degraded", "own"]
 
     for folder_name in folders:
         folder = SAMPLES_DIR / folder_name
@@ -41,7 +33,12 @@ def main():
 
             content = file.read_bytes()
 
-            result = extraction.process(content)
+            try:
+                result = extraction.process(content)
+
+            except (images.ImageError, llm.LLMError) as exc:
+                print(f"Помилка обробки {file_path}: {exc}")
+                continue
 
             print("Рішення:", result.decision)
 

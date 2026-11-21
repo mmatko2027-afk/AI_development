@@ -33,8 +33,7 @@ import json
 import openai
 from .images import PreparedImage
 from .schema import output_schema, validate
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from . import extraction, images, llm
+
 load_dotenv()
 
 # Доступ до сервісу. Значень тут немає навмисно — вони у вашому `.env`.
@@ -212,14 +211,16 @@ def extract(image: PreparedImage) -> dict:
             status_code=502
         ) from exc
     
-    except Exception as exc:
-        raise LLMError(f"Помилка запиту до моделі: {exc}")
-
     elapsed = time.perf_counter() - start_time
 
     if not response.choices:
         raise LLMError("Модель не повернула відповідь.")
 
+    message = response.choices[0].message
+    refusal = getattr(message, "refusal", None)
+    if refusal:
+        raise LLMError(f"Модель відмовилася обробляти зображення: {refusal}", status_code=422)
+    content = message.content
     content = response.choices[0].message.content
 
     if not content:

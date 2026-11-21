@@ -29,6 +29,7 @@
 
 import json
 
+from typing import Literal
 from pydantic import BaseModel, ValidationError
 class Supplier(BaseModel):
     name: str | None = None
@@ -50,7 +51,7 @@ class Item(BaseModel):
 
 
 class Invoice(BaseModel):
-    document_type: str
+    document_type: Literal["invoice", "other"]
 
     invoice_number: str | None = None
     date: str | None = None

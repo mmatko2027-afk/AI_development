@@ -28,8 +28,7 @@ from dataclasses import dataclass, field
 
 from . import images, llm, rules
 from .rules import Issue
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from . import extraction, images, llm
+
 
 @dataclass
 class Result:
@@ -74,40 +73,14 @@ def decide(document: dict, issues: list[Issue]) -> tuple[str, list[str]]:
 def process(content: bytes) -> Result:
     """Обробити файл: підготувати → вилучити → перевірити → вирішити."""
     start = time.perf_counter()
-
-    try:
-        image = images.prepare(content)
-    except images.ImageError as error:
-        return Result(
-            decision="reject",
-            reasons=[str(error)],
-        )
-
+    image = images.prepare(content)
     prepare_time = time.perf_counter() - start
 
     start = time.perf_counter()
-
-    try:
-        result = llm.extract(image)
-    except llm.LLMError as error:
-        return Result(
-            decision="review",
-            reasons=[str(error)],
-            image={
-                "original": image.original,
-                "sent": image.sent,
-            },
-            elapsed={
-                "prepare": round(prepare_time, 3),
-                "extraction": round(time.perf_counter() - start, 3),
-            },
-        )
-
+    result = llm.extract(image)
     extraction_time = time.perf_counter() - start
 
     document = result["data"]
-
-    start = time.perf_counter()
 
     issues = rules.check(document)
 
@@ -132,3 +105,7 @@ def process(content: bytes) -> Result:
         },
         usage=result["usage"],
     )
+
+
+
+

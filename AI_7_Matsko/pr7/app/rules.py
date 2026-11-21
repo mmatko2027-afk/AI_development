@@ -32,23 +32,17 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
+
 REFERENCE_DIR = Path(__file__).resolve().parent.parent / "reference"
+MONEY_STEP = Decimal("0.01")
 
 
 @dataclass
 class Issue:
-    """Проблема, знайдена правилом.
-
-    `field` — шлях до поля, наприклад `supplier.iban` чи `items.1.amount`
-    (другий рядок: індекс — з нуля); сторінка підсвічує поле з таким
-    шляхом. `rule` — коротка назва
-    правила. `message` — пояснення для людини, яка перевірятиме документ.
-    `severity` — `error` або `warning`; що з цього випливає для рішення,
-    вирішує `app/extraction.py`.
-    """
+    """Проблема, знайдена правилом."""
 
     field: str
     rule: str
@@ -58,8 +52,12 @@ class Issue:
 
 def load_reference() -> tuple[dict, list[dict]]:
     """Прочитати реквізити своєї компанії й довідник постачальників."""
-    company = json.loads((REFERENCE_DIR / "company.json").read_text(encoding="utf-8"))
-    suppliers = json.loads((REFERENCE_DIR / "suppliers.json").read_text(encoding="utf-8"))
+    company = json.loads(
+        (REFERENCE_DIR / "company.json").read_text(encoding="utf-8")
+    )
+    suppliers = json.loads(
+        (REFERENCE_DIR / "suppliers.json").read_text(encoding="utf-8")
+    )
     return company, suppliers
 
 
@@ -67,67 +65,79 @@ def clean_text(value: str) -> str:
     value = value.replace("ʼ", "'")
     value = value.replace("’", "'")
     value = re.sub(r"\s+", " ", value)
-
     return value.strip()
 
 
 def _compact(value: str) -> str:
-    return re.sub(r"\s+", "", value)
+    return re.sub(r"\s+", "", str(value))
+
+
+def _money(value: Decimal) -> Decimal:
+    """Округлити суму до копійок."""
+    return value.quantize(MONEY_STEP, rounding=ROUND_HALF_UP)
 
 
 def _valid_iban(value: str) -> bool:
     iban = _compact(value).upper()
+
     if not re.fullmatch(r"UA[0-9]{27}", iban):
         return False
 
     rearranged = iban[4:] + iban[:4]
     remainder = 0
+
     for character in rearranged:
-        expanded = (
-            str(ord(character) - ord("A") + 10)
-            if character.isalpha()
-            else character
-        )
+        if character.isalpha():
+            expanded = str(ord(character) - ord("A") + 10)
+        else:
+            expanded = character
+
         for digit in expanded:
             remainder = (remainder * 10 + int(digit)) % 97
+
     return remainder == 1
 
 
 def _valid_edrpou(value: str) -> bool:
     code = _compact(value)
+
     if not re.fullmatch(r"[0-9]{8}", code):
         return False
 
     weights = [1, 2, 3, 4, 5, 6, 7]
+
     if code[0] in "345":
         weights = [7, 1, 2, 3, 4, 5, 6]
 
-    total = sum(weight * int(digit) for weight, digit in zip(weights, code[:7]))
+    total = sum(
+        weight * int(digit)
+        for weight, digit in zip(weights, code[:7])
+    )
+
     check_digit = total % 11
+
     if check_digit == 10:
         total = sum(
             (weight + 2) * int(digit)
             for weight, digit in zip(weights, code[:7])
         )
         check_digit = total % 11 % 10
+
     return int(code[-1]) == check_digit
 
 
 def _decimal(value: object) -> Decimal:
     normalized = re.sub(r"\s+", "", str(value)).replace(",", ".")
     number = Decimal(normalized)
+
     if not number.is_finite():
         raise InvalidOperation
+
     return number
 
 
 def check(document: dict) -> list[Issue]:
-    """Застосувати правила до вилученого документа.
-
-    Порожній перелік означає, що правила нічого не знайшли, — а не що
-    документ прочитано правильно. Різниця між цими двома речами і є
-    предметом перевірки на наборі зразків.
-    """
+    """Застосувати правила до вилученого документа."""
     issues = []
 
     company, suppliers = load_reference()
@@ -142,6 +152,7 @@ def check(document: dict) -> list[Issue]:
         )
         return issues
 
+    # Перевірка обов'язкових полів верхнього рівня.
     required_fields = [
         "invoice_number",
         "date",
@@ -154,7 +165,9 @@ def check(document: dict) -> list[Issue]:
     ]
 
     for field in required_fields:
-        if not document.get(field):
+        value = document.get(field)
+
+        if value is None or value == "" or value == [] or value == {}:
             issues.append(
                 Issue(
                     field,
@@ -163,11 +176,46 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
-    invoice_date = document.get("date")
+    supplier = document.get("supplier") or {}
+    buyer = document.get("buyer") or {}
 
-    if invoice_date:
+    # Перевірка обов'язкових полів постачальника.
+    supplier_required = ["name", "code", "iban"]
+
+    for field in supplier_required:
+        value = supplier.get(field)
+
+        if value is None or not str(value).strip():
+            issues.append(
+                Issue(
+                    f"supplier.{field}",
+                    "required",
+                    "Обов'язкове поле постачальника відсутнє."
+                )
+            )
+
+    # Перевірка обов'язкових полів покупця.
+    buyer_required = ["name", "code"]
+
+    for field in buyer_required:
+        value = buyer.get(field)
+
+        if value is None or not str(value).strip():
+            issues.append(
+                Issue(
+                    f"buyer.{field}",
+                    "required",
+                    "Обов'язкове поле покупця відсутнє."
+                )
+            )
+
+    # Перевірка дати рахунку.
+    invoice_date = None
+    date_value = document.get("date")
+
+    if date_value:
         try:
-            invoice_date = date.fromisoformat(invoice_date)
+            invoice_date = date.fromisoformat(date_value)
 
             if invoice_date > date.today():
                 issues.append(
@@ -178,7 +226,7 @@ def check(document: dict) -> list[Issue]:
                     )
                 )
 
-        except ValueError:
+        except (ValueError, TypeError):
             issues.append(
                 Issue(
                     "date",
@@ -187,12 +235,12 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
+    # Перевірка строку дії рахунку.
     valid_until = document.get("valid_until")
 
-    if valid_until and document.get("date"):
+    if valid_until and invoice_date is not None:
         try:
             valid_date = date.fromisoformat(valid_until)
-            invoice_date = date.fromisoformat(document["date"])
 
             if valid_date < invoice_date:
                 issues.append(
@@ -203,7 +251,7 @@ def check(document: dict) -> list[Issue]:
                     )
                 )
 
-        except ValueError:
+        except (ValueError, TypeError):
             issues.append(
                 Issue(
                     "valid_until",
@@ -212,30 +260,35 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
-    buyer = document.get("buyer")
+    # Перевірка покупця.
+    buyer_code = buyer.get("code")
 
-    if buyer:
-        buyer_code = buyer.get("code")
-        if buyer_code:
-            if re.fullmatch(r"[0-9]{8}", _compact(buyer_code)):
-                if not _valid_edrpou(buyer_code):
-                    issues.append(
-                        Issue(
-                            "buyer.code",
-                            "edrpou_checksum",
-                            "Неправильний контрольний розряд ЄДРПОУ покупця."
-                        )
-                    )
-            elif not re.fullmatch(r"[0-9]{10}", _compact(buyer_code)):
+    if buyer_code:
+        compact_code = _compact(buyer_code)
+
+        if re.fullmatch(r"[0-9]{8}", compact_code):
+            if not _valid_edrpou(compact_code):
                 issues.append(
                     Issue(
                         "buyer.code",
-                        "code_format",
-                        "Код має бути 8 цифр ЄДРПОУ або 10 цифр РНОКПП."
+                        "edrpou_checksum",
+                        "Неправильний контрольний розряд ЄДРПОУ покупця."
                     )
                 )
 
-        if clean_text(buyer.get("name", "")) != clean_text(company["name"]):
+        elif not re.fullmatch(r"[0-9]{10}", compact_code):
+            issues.append(
+                Issue(
+                    "buyer.code",
+                    "code_format",
+                    "Код має бути 8 цифр ЄДРПОУ або 10 цифр РНОКПП."
+                )
+            )
+
+    if buyer.get("name"):
+        if clean_text(buyer["name"]).lower() != clean_text(
+            company["name"]
+        ).lower():
             issues.append(
                 Issue(
                     "buyer.name",
@@ -244,7 +297,8 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
-        if buyer.get("code") != company["code"]:
+    if buyer_code:
+        if _compact(buyer_code) != _compact(company["code"]):
             issues.append(
                 Issue(
                     "buyer.code",
@@ -253,58 +307,72 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
-    supplier = document.get("supplier")
+    # Перевірка постачальника.
+    supplier_name = supplier.get("name")
+    supplier_code = supplier.get("code")
+    supplier_iban = supplier.get("iban")
 
-    if supplier:
-        supplier_name = supplier.get("name")
-        supplier_code = supplier.get("code")
-        supplier_iban = supplier.get("iban")
+    if supplier_code:
+        compact_code = _compact(supplier_code)
 
-        if supplier_code:
-            if re.fullmatch(r"[0-9]{8}", _compact(supplier_code)):
-                if not _valid_edrpou(supplier_code):
-                    issues.append(
-                        Issue(
-                            "supplier.code",
-                            "edrpou_checksum",
-                            "Неправильний контрольний розряд ЄДРПОУ постачальника."
-                        )
-                    )
-            elif not re.fullmatch(r"[0-9]{10}", _compact(supplier_code)):
+        if re.fullmatch(r"[0-9]{8}", compact_code):
+            if not _valid_edrpou(compact_code):
                 issues.append(
                     Issue(
                         "supplier.code",
-                        "code_format",
-                        "Код має бути 8 цифр ЄДРПОУ або 10 цифр РНОКПП."
+                        "edrpou_checksum",
+                        "Неправильний контрольний розряд ЄДРПОУ постачальника."
                     )
                 )
 
-        if supplier_iban:
-            compact_iban = _compact(supplier_iban)
-            if not re.fullmatch(r"UA[0-9]{27}", compact_iban, re.IGNORECASE):
-                issues.append(
-                    Issue(
-                        "supplier.iban",
-                        "iban_format",
-                        "IBAN має містити UA та 27 цифр."
-                    )
+        elif not re.fullmatch(r"[0-9]{10}", compact_code):
+            issues.append(
+                Issue(
+                    "supplier.code",
+                    "code_format",
+                    "Код має бути 8 цифр ЄДРПОУ або 10 цифр РНОКПП."
                 )
-            elif not _valid_iban(supplier_iban):
-                issues.append(
-                    Issue(
-                        "supplier.iban",
-                        "iban_checksum",
-                        "Контрольна сума IBAN неправильна."
-                    )
+            )
+
+    # Перевірка формату та контрольного числа IBAN.
+    if supplier_iban:
+        compact_iban = _compact(supplier_iban).upper()
+
+        if not re.fullmatch(r"UA[0-9]{27}", compact_iban):
+            issues.append(
+                Issue(
+                    "supplier.iban",
+                    "iban_format",
+                    "IBAN має містити UA та 27 цифр."
                 )
+            )
 
-        found_supplier = None
+        elif not _valid_iban(supplier_iban):
+            issues.append(
+                Issue(
+                    "supplier.iban",
+                    "iban_checksum",
+                    "Контрольна сума IBAN неправильна."
+                )
+            )
 
+    # Пошук постачальника в довіднику.
+    found_supplier = None
+
+    if supplier_name or supplier_code:
         for item in suppliers:
-            if (
-                item["name"] == supplier_name
-                or item["code"] == supplier_code
-            ):
+            name_match = (
+                supplier_name
+                and clean_text(item["name"]).lower()
+                == clean_text(supplier_name).lower()
+            )
+
+            code_match = (
+                supplier_code
+                and _compact(item["code"]) == _compact(supplier_code)
+            )
+
+            if name_match or code_match:
                 found_supplier = item
                 break
 
@@ -316,34 +384,60 @@ def check(document: dict) -> list[Issue]:
                     "Постачальника немає у довіднику."
                 )
             )
-        elif supplier_iban:
-            iban1 = _compact(supplier_iban).upper()
-            iban2 = _compact(found_supplier["iban"]).upper()
-            if iban1 != iban2:
-                issues.append(
-                    Issue(
-                        "supplier.iban",
-                        "iban",
-                        "IBAN не відповідає довіднику."
+        else:
+            # Назва та код перевіряються окремо.
+            if supplier_name:
+                if clean_text(supplier_name).lower() != clean_text(
+                    found_supplier["name"]
+                ).lower():
+                    issues.append(
+                        Issue(
+                            "supplier.name",
+                            "supplier_name",
+                            "Назва постачальника не відповідає довіднику."
+                        )
                     )
-                )
 
-    items = document.get("items", [])
+            if supplier_code:
+                if _compact(supplier_code) != _compact(
+                    found_supplier["code"]
+                ):
+                    issues.append(
+                        Issue(
+                            "supplier.code",
+                            "supplier_code",
+                            "Код постачальника не відповідає довіднику."
+                        )
+                    )
+
+            # Перевірка IBAN за довідником.
+            if supplier_iban:
+                iban1 = _compact(supplier_iban).upper()
+                iban2 = _compact(found_supplier["iban"]).upper()
+
+                if iban1 != iban2:
+                    issues.append(
+                        Issue(
+                            "supplier.iban",
+                            "iban",
+                            "IBAN не відповідає довіднику."
+                        )
+                    )
+
+    # Перевірка позицій рахунку.
+    items = document.get("items") or []
 
     total_items = Decimal("0")
     items_valid = True
 
     for number, item in enumerate(items):
-
         try:
             quantity = _decimal(item.get("quantity"))
             price = _decimal(item.get("price"))
             amount = _decimal(item.get("amount"))
 
-            calculated = quantity * price
-
-            calculated = calculated.quantize(Decimal("0.01"))
-            amount = amount.quantize(Decimal("0.01"))
+            calculated = _money(quantity * price)
+            amount = _money(amount)
 
             if calculated != amount:
                 issues.append(
@@ -356,7 +450,7 @@ def check(document: dict) -> list[Issue]:
 
             total_items += amount
 
-        except (InvalidOperation, TypeError):
+        except (InvalidOperation, TypeError, ValueError):
             items_valid = False
             issues.append(
                 Issue(
@@ -366,11 +460,15 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
+    # Перевірка суми без ПДВ.
     total_without_vat = None
-    if document.get("total_without_vat") not in (None, ""):
+    total_value = document.get("total_without_vat")
+
+    if total_value is not None and total_value != "":
         try:
-            total_without_vat = _decimal(document["total_without_vat"])
-        except (InvalidOperation, TypeError):
+            total_without_vat = _decimal(total_value)
+
+        except (InvalidOperation, TypeError, ValueError):
             issues.append(
                 Issue(
                     "total_without_vat",
@@ -382,8 +480,7 @@ def check(document: dict) -> list[Issue]:
     if (
         items_valid
         and total_without_vat is not None
-        and total_items.quantize(Decimal("0.01"))
-        != total_without_vat.quantize(Decimal("0.01"))
+        and _money(total_items) != _money(total_without_vat)
     ):
         issues.append(
             Issue(
@@ -393,11 +490,15 @@ def check(document: dict) -> list[Issue]:
             )
         )
 
+    # Перевірка ПДВ.
     vat = None
-    if document.get("vat") not in (None, ""):
+    vat_value = document.get("vat")
+
+    if vat_value is not None and vat_value != "":
         try:
-            vat = _decimal(document["vat"])
-        except (InvalidOperation, TypeError):
+            vat = _decimal(vat_value)
+
+        except (InvalidOperation, TypeError, ValueError):
             issues.append(
                 Issue(
                     "vat",
@@ -406,26 +507,19 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
-    supplier_info = None
-
-    if supplier:
-        for item in suppliers:
-            if (
-                item["name"] == supplier.get("name")
-                or item["code"] == supplier.get("code")
-            ):
-                supplier_info = item
-                break
-
-    if supplier_info and total_without_vat is not None and vat is not None:
-        if supplier_info["vat_payer"]:
-            expected_vat = total_without_vat * Decimal("0.20")
+    if (
+        found_supplier is not None
+        and total_without_vat is not None
+        and vat is not None
+    ):
+        if found_supplier["vat_payer"]:
+            expected_vat = _money(
+                total_without_vat * Decimal("0.20")
+            )
         else:
-            expected_vat = Decimal("0")
+            expected_vat = Decimal("0.00")
 
-        if vat.quantize(Decimal("0.01")) != expected_vat.quantize(
-            Decimal("0.01")
-        ):
+        if _money(vat) != expected_vat:
             issues.append(
                 Issue(
                     "vat",
@@ -434,11 +528,15 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
+    # Перевірка загальної суми до сплати.
     total_due = None
-    if document.get("total_due") not in (None, ""):
+    total_due_value = document.get("total_due")
+
+    if total_due_value is not None and total_due_value != "":
         try:
-            total_due = _decimal(document["total_due"])
-        except (InvalidOperation, TypeError):
+            total_due = _decimal(total_due_value)
+
+        except (InvalidOperation, TypeError, ValueError):
             issues.append(
                 Issue(
                     "total_due",
@@ -452,10 +550,9 @@ def check(document: dict) -> list[Issue]:
         and total_without_vat is not None
         and vat is not None
     ):
-        expected_total = total_without_vat + vat
-        if total_due.quantize(Decimal("0.01")) != expected_total.quantize(
-            Decimal("0.01")
-        ):
+        expected_total = _money(total_without_vat + vat)
+
+        if _money(total_due) != expected_total:
             issues.append(
                 Issue(
                     "total_due",
@@ -465,4 +562,3 @@ def check(document: dict) -> list[Issue]:
             )
 
     return issues
-    
