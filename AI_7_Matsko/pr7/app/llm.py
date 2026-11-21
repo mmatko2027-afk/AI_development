@@ -221,8 +221,6 @@ def extract(image: PreparedImage) -> dict:
     if refusal:
         raise LLMError(f"Модель відмовилася обробляти зображення: {refusal}", status_code=422)
     content = message.content
-    content = response.choices[0].message.content
-
     if not content:
         raise LLMError("Модель повернула порожню відповідь.")
 

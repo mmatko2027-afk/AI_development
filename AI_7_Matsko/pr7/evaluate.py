@@ -1,9 +1,9 @@
 """Перевірка зразків рахунків."""
 
 from pathlib import Path
-
-from app import extraction
 from app import extraction, images, llm
+
+
 
 SAMPLES_DIR = Path("samples")
 
@@ -37,7 +37,7 @@ def main():
                 result = extraction.process(content)
 
             except (images.ImageError, llm.LLMError) as exc:
-                print(f"Помилка обробки {file_path}: {exc}")
+                print(f"Помилка обробки {file.name}: {exc}")
                 continue
 
             print("Рішення:", result.decision)

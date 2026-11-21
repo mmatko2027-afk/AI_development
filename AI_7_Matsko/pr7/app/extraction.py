@@ -81,7 +81,7 @@ def process(content: bytes) -> Result:
     extraction_time = time.perf_counter() - start
 
     document = result["data"]
-
+    start = time.perf_counter()
     issues = rules.check(document)
 
     checks_time = time.perf_counter() - start

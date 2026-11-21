@@ -19,7 +19,6 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from . import extraction
 from . import extraction, images, llm
 app = FastAPI(title="Розбір рахунків — ПР7")
 
