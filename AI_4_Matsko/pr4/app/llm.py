@@ -182,50 +182,42 @@ def fit_budget(history: list[dict], budget: int) -> list[dict]:
     """
     if budget <= 0:
         return []
+
     selected_indexes = []
     used_tokens = 0
 
-    important_index = None
-    for index, turn in enumerate(history):
+    for index in range(len(history) - 1, -1, -1):
+        turn = history[index]
+
         if turn["role"] != "user":
             continue
-        numbers = re.findall(
-            r"\b\d{6}\b",
-            turn["content"]
-        )
-        if numbers:
-            important_index = index
-            break
 
-    if important_index is not None:
-        important_turn = history[important_index]
-        important_tokens = estimate_tokens(
-            important_turn["content"]
-        )
-        if important_tokens <= budget:
-            selected_indexes.append(
-                important_index
-            )
-            used_tokens += important_tokens
-    for index in range(
-        len(history) - 1,
-        -1,
-        -1
-    ):
+        numbers = re.findall(r"\b\d{6}\b", turn["content"])
+
+        if numbers:
+            turn_tokens = estimate_tokens(turn["content"])
+
+            if used_tokens + turn_tokens <= budget:
+                selected_indexes.append(index)
+                used_tokens += turn_tokens
+
+    for index in range(len(history) - 1, -1, -1):
         if index in selected_indexes:
             continue
-        turn_tokens = estimate_tokens(
-            history[index]["content"]
-        )
-        if used_tokens + turn_tokens > budget:
-            continue
-        selected_indexes.append(index)
-        used_tokens += turn_tokens
+
+        turn_tokens = estimate_tokens(history[index]["content"])
+
+        if used_tokens + turn_tokens <= budget:
+            selected_indexes.append(index)
+            used_tokens += turn_tokens
+
     selected_indexes.sort()
+
     return [
         history[index]
         for index in selected_indexes
     ]
+
 
 
 def build_messages(message: str, history: list[dict], context: str) -> list[dict]:
@@ -262,15 +254,11 @@ def build_messages(message: str, history: list[dict], context: str) -> list[dict
         history_budget
     )
     messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT
-        },
-        {
-            "role": "system",
-            "content": rules_message
-        }
-    ]
+    {
+        "role": "system",
+        "content": SYSTEM_PROMPT + "\n\n" + rules_message
+    }
+]
     messages.extend(short_history)
     messages.append(
         {
@@ -367,20 +355,25 @@ def ask(message: str, history: list[dict], context: str) -> dict:
     response = None
     result = None
     last_error = None
+    retry_messages = messages
 
     for use_schema in [True, False]:
         try:
             response = call_model(
                 client=client,
-                messages=messages,
+                messages=retry_messages,
                 use_schema=use_schema
             )
+
+            if not response.choices:
+                raise ValueError("Модель повернула порожню відповідь.")
 
             choice = response.choices[0]
 
             if choice.finish_reason == "length":
-                raise ValueError(
-                    "Відповідь обрізано через LLM_MAX_TOKENS."
+                raise LLMError(
+                    "Відповідь моделі обрізана через обмеження токенів.",
+                    status_code=502
                 )
 
             raw_text = (
@@ -389,6 +382,9 @@ def ask(message: str, history: list[dict], context: str) -> dict:
 
             result = validate(raw_text)
             break
+
+        except LLMError:
+            raise
 
         except ValueError as error:
             last_error = error
@@ -403,6 +399,21 @@ def ask(message: str, history: list[dict], context: str) -> dict:
                     f"Модель повернула неправильну відповідь: {error}",
                     status_code=502
                 ) from error
+
+            retry_messages = messages + [
+                {
+                    "role": "assistant",
+                    "content": raw_text
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Попередня відповідь не пройшла перевірку. "
+                        f"Виправ помилку: {error}. "
+                        "Поверни правильний JSON за заданою схемою."
+                    )
+                }
+            ]
 
             continue
 
