@@ -124,6 +124,8 @@ def build_messages(question: str) -> list[dict]:
 def chat(messages: list[dict], tools: list[dict], tool_choice: str = "auto") -> dict:
     """Один виклик моделі з історією повідомлень і описами інструментів
     — для агента."""
+    if not MODEL:
+        raise LLMError("Не задано LLM_MODEL у файлі .env")
     start = time.perf_counter()
     try:
         response = get_client().chat.completions.create(
@@ -186,7 +188,11 @@ def chat(messages: list[dict], tools: list[dict], tool_choice: str = "auto") -> 
     }
 
 
-def complete(messages: list[dict], schema: dict | None = None) -> dict:
+def complete(
+    messages: list[dict],
+    schema: dict | None = None,
+    schema_name: str = "customer_request",
+) -> dict:
     """Одне звертання до моделі без інструментів — для кроків workflow.
 
     Нове в ПР9. Якщо передано `schema`, модель має повернути JSON за
@@ -196,6 +202,8 @@ def complete(messages: list[dict], schema: dict | None = None) -> dict:
     `usage`. Перевірка JSON за схемою — не тут, а в `app/schema.py`:
     модуль моделі не знає, що саме означають поля.
     """
+    if not MODEL:
+        raise LLMError("Не задано LLM_MODEL у файлі .env")
     start = time.perf_counter()
 
     request = {
@@ -209,7 +217,7 @@ def complete(messages: list[dict], schema: dict | None = None) -> dict:
         request["response_format"] = {
             "type": "json_schema",
             "json_schema": {
-                "name": "customer_request",
+                "name": schema_name,
                 "strict": True,
                 "schema": schema,
             },

@@ -91,6 +91,7 @@ class ToolResult:
     content: dict | list | str | None = None
     reason: str | None = None
     arguments: dict | None = None
+    error_code: str | None = None
 
 
 def specs() -> list[dict]:
@@ -321,12 +322,13 @@ def specs() -> list[dict]:
     ]
 
 
-def make_result(status, content=None, reason=None, arguments=None):
+def make_result(status, content=None, reason=None, arguments=None, error_code=None):
     return ToolResult(
         status=status,
         content=content,
         reason=reason,
         arguments=arguments,
+        error_code=error_code,
     )
 
 def validate_arguments(name, arguments):
@@ -364,6 +366,28 @@ def validate_arguments(name, arguments):
 
         if not isinstance(arguments["query"], str):
             return "query має бути рядком."
+
+    if name == "cancel_order":
+        if "order_id" not in arguments:
+            return "Не вказано номер замовлення."
+
+        if not isinstance(arguments["order_id"], str):
+            return "order_id має бути рядком."
+
+    if name == "create_return":
+        for req in ("order_id", "sku", "reason"):
+            if req not in arguments or not isinstance(arguments[req], str):
+                return f"Поле {req} має бути рядком."
+        qty = arguments.get("quantity", 1)
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty < 1:
+            return "quantity має бути цілим числом >= 1."
+
+    if name == "delivery_quote":
+        for req in ("city", "method"):
+            if req not in arguments or not isinstance(arguments[req], str):
+                return f"Поле {req} має бути рядком."
+        if not isinstance(arguments.get("items"), list) or not arguments["items"]:
+            return "items має бути непорожнім списком."
 
     return None
 def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
@@ -652,10 +676,17 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
 
             with _RETURN_CREATION_LOCK:
                 existing = service.list_returns(order_id)
-                if any(item["sku"] == sku for item in existing):
+                existing_match = next(
+                    (item for item in existing if item["sku"] == sku),
+                    None,
+                )
+                if existing_match is not None:
                     return make_result(
                         "rejected",
-                        reason="Для цього товару в замовленні вже є заявка на повернення.",
+                        reason=(
+                            "Для цього товару в замовленні вже є заявка на повернення "
+                            f"{existing_match['return_id']}."
+                        ),
                         arguments=arguments,
                     )
 
@@ -708,6 +739,7 @@ def call(name: str, raw_arguments: str, ctx: Context) -> ToolResult:
             "error",
             reason=str(error),
             arguments=arguments,
+            error_code=getattr(error, "code", None),
         )
 
     except Exception as error:

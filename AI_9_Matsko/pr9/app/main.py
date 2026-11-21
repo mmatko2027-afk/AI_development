@@ -113,9 +113,29 @@ def api_create(payload: RequestIn) -> dict:
     помилкою 500. Зверніть увагу: звернення, яке workflow довів до
     контрольованого стану «зупинено» чи «збій», — це не помилка запиту.
     """
-    if payload.mode == "agent":
-        return answer_to_dict(assistant.answer(payload.text, payload.customer_id))
-    return run_to_dict(workflow.start(payload.text, payload.customer_id))
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Текст звернення не може бути порожнім.",
+        )
+
+    known_customers = {c["customer_id"] for c in service.list_customers()}
+    if payload.customer_id not in known_customers:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Клієнта {payload.customer_id} не знайдено.",
+        )
+
+    try:
+        if payload.mode == "agent":
+            return answer_to_dict(assistant.answer(text, payload.customer_id))
+        return run_to_dict(workflow.start(text, payload.customer_id))
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Не вдалося обробити звернення: {error}",
+        ) from error
 
 
 @app.get("/api/runs")
@@ -131,7 +151,10 @@ def api_runs(status: str | None = None) -> list[dict]:
 @app.get("/api/runs/{run_id}")
 def api_run(run_id: str) -> dict:
     """Стан одного звернення."""
-    run = store.load(run_id)
+    try:
+        run = store.load(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if run is None:
         raise HTTPException(status_code=404, detail="Звернення не знайдено.")
     return run_to_dict(run)
@@ -148,4 +171,9 @@ def api_decision(run_id: str, payload: DecisionIn) -> dict:
         run = workflow.resume(run_id, payload.approve, payload.comment)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Не вдалося обробити рішення оператора: {error}",
+        ) from error
     return run_to_dict(run)

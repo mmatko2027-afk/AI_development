@@ -30,6 +30,7 @@
 * що рахувати окремо: час моделі й час інструментів — це різні витрати.
 """
 
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -95,7 +96,8 @@ def answer(question: str, customer_id: str) -> Answer:
     )
 
     calls = []
-    total_model_time = 0
+    total_model_time = 0.0
+    total_tools_time = 0.0
     total_usage = {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -116,7 +118,8 @@ def answer(question: str, customer_id: str) -> Answer:
                 rounds=round_number,
                 stopped="model_error",
                 elapsed={
-                    "model": total_model_time
+                    "model": total_model_time,
+                    "tools": total_tools_time,
                 },
                 usage=total_usage,
             )
@@ -144,7 +147,8 @@ def answer(question: str, customer_id: str) -> Answer:
                 stopped="answer",
                 model=result.get("model"),
                 elapsed={
-                    "model": total_model_time
+                    "model": total_model_time,
+                    "tools": total_tools_time,
                 },
                 usage=total_usage,
             )
@@ -163,6 +167,7 @@ def answer(question: str, customer_id: str) -> Answer:
             )
 
             tool_elapsed = time.perf_counter() - start_tool
+            total_tools_time += tool_elapsed
 
             calls.append(
                 ToolTrace(
@@ -176,11 +181,18 @@ def answer(question: str, customer_id: str) -> Answer:
                 )
             )
 
+            if tool_result.status == "ok":
+                tool_payload = tool_result.content
+            else:
+                tool_payload = {
+                    "status": tool_result.status,
+                    "reason": tool_result.reason,
+                }
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": str(tool_result.content),
+                    "content": json.dumps(tool_payload, ensure_ascii=False),
                 }
             )
 

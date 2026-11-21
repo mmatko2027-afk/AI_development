@@ -117,7 +117,10 @@ def list_runs(status: str | None = None) -> list[Run]:
     runs = []
 
     for path in RUNS_DIR.glob("*.json"):
-        run = load(path.stem)
+        try:
+            run = load(path.stem)
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            continue
 
         if run is not None:
             if status is None or run.status == status:

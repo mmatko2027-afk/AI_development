@@ -28,6 +28,7 @@
 """
 import json
 
+
 def request_schema() -> dict:
     """Повернути JSON Schema результату розбору звернення.
 
@@ -43,17 +44,22 @@ def request_schema() -> dict:
                     "return",
                     "cancel_order",
                     "order_status",
-                    "other"
+                    "multiple",
+                    "other",
                 ],
-                "description": "Основний вид звернення клієнта."
+                "description": "Основний вид звернення клієнта; multiple — якщо в одному зверненні кілька окремих дій.",
             },
             "order_number": {
                 "type": ["string", "null"],
-                "description": "Номер замовлення або null, якщо його не названо."
+                "description": "Номер замовлення або null, якщо його не названо.",
             },
             "product_name": {
                 "type": ["string", "null"],
-                "description": "Назва товару зі слів клієнта або null."
+                "description": "Назва товару зі слів клієнта або null.",
+            },
+            "quantity": {
+                "type": ["integer", "null"],
+                "description": "Кількість одиниць товару для повернення або null, якщо не вказано.",
             },
             "return_category": {
                 "type": ["string", "null"],
@@ -63,23 +69,24 @@ def request_schema() -> dict:
                     "wrong_item",
                     "damaged_delivery",
                     "other",
-                    None
+                    None,
                 ],
-                "description": "Категорія причини повернення або null."
+                "description": "Категорія причини повернення або null.",
             },
             "return_reason": {
                 "type": ["string", "null"],
-                "description": "Причина повернення словами клієнта або null."
-            }
+                "description": "Причина повернення словами клієнта або null.",
+            },
         },
         "required": [
             "intent",
             "order_number",
             "product_name",
+            "quantity",
             "return_category",
-            "return_reason"
+            "return_reason",
         ],
-        "additionalProperties": False
+        "additionalProperties": False,
     }
 
 
@@ -114,13 +121,31 @@ def validate(raw: str) -> dict:
 
     for field, rules in properties.items():
         value = data[field]
-        allowed_types = rules["type"]
+        raw_types = rules["type"]
+        allowed_types = [raw_types] if isinstance(raw_types, str) else raw_types
 
         if value is None:
             if "null" not in allowed_types:
                 raise ValueError(f"Поле {field} не може бути null.")
-        elif "string" in allowed_types and not isinstance(value, str):
-            raise ValueError(f"Поле {field} має бути рядком.")
+        elif "string" in allowed_types:
+            if not isinstance(value, str):
+                raise ValueError(f"Поле {field} має бути рядком.")
+            cleaned = value.strip()
+            if not cleaned:
+                if "null" not in allowed_types:
+                    raise ValueError(f"Поле {field} не може бути порожнім.")
+                data[field] = None
+                value = None
+            else:
+                if field == "order_number":
+                    cleaned = cleaned.lstrip("#№ ")
+                data[field] = cleaned
+                value = cleaned
+        elif "integer" in allowed_types:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"Поле {field} має бути цілим числом.")
+            if value < 1:
+                raise ValueError(f"Поле {field} має бути не меншим за 1.")
 
         if value is not None and "enum" in rules:
             if value not in rules["enum"]:
@@ -129,3 +154,36 @@ def validate(raw: str) -> dict:
                 )
 
     return data
+
+
+def item_selection_schema(skus: list[str]) -> dict:
+    """Динамічна JSON Schema для вибору товару з позицій конкретного замовлення."""
+    return {
+        "type": "object",
+        "properties": {
+            "sku": {
+                "type": ["string", "null"],
+                "enum": [*skus, None],
+                "description": "SKU товару зі списку позицій замовлення або null, якщо жоден не підходить.",
+            }
+        },
+        "required": ["sku"],
+        "additionalProperties": False,
+    }
+
+
+def validate_item_selection(raw: str, skus: list[str]) -> dict:
+    """Перевірити вибір товару за динамічною схемою."""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError("Відповідь моделі при виборі товару не є коректним JSON.")
+
+    if not isinstance(data, dict) or set(data.keys()) != {"sku"}:
+        raise ValueError("Результат вибору товару має містити лише поле sku.")
+
+    sku = data["sku"]
+    if sku is not None and (not isinstance(sku, str) or sku not in skus):
+        raise ValueError(f"Обраний SKU {sku!r} відсутній у замовленні.")
+
+    return {"sku": sku}
