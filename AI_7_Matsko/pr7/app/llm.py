@@ -28,12 +28,13 @@ import time
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import json
 
+import openai
 from .images import PreparedImage
 from .schema import output_schema, validate
-
-load_dotenv()
-
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from . import extraction, images, llm
 load_dotenv()
 
 # Доступ до сервісу. Значень тут немає навмисно — вони у вашому `.env`.
@@ -54,6 +55,9 @@ class LLMError(Exception):
     доведеться так само — таймаут і невірний ключ користувач має побачити
     по-різному.
     """
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def get_client():
@@ -61,6 +65,8 @@ def get_client():
     if not API_KEY:
         raise LLMError("Не вказано LLM_API_KEY у файлі .env.")
 
+    if not MODEL:
+        raise LLMError("Не вказано LLM_MODEL у файлі .env.")
     if not BASE_URL:
         raise LLMError("Не вказано LLM_BASE_URL у файлі .env.")
 
@@ -74,7 +80,7 @@ def get_client():
 def build_messages(image: PreparedImage) -> list[dict]:
     """Скласти список повідомлень для моделі: інструкція і зображення."""
     image_base64 = base64.b64encode(image.data).decode("utf-8")
-
+    
     instruction = """
 Проаналізуй зображення документа.
 
@@ -113,12 +119,10 @@ def build_messages(image: PreparedImage) -> list[dict]:
 """
 
     schema = output_schema()
+    
+    schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
 
-    instruction += f"""
-
-Структура відповіді:
-{schema}
-"""
+    instruction += f"\n\nСтруктура відповіді:\n{schema_json}\n"
 
     return [
         {
@@ -164,8 +168,52 @@ def extract(image: PreparedImage) -> dict:
             max_tokens=MAX_TOKENS,
             response_format={"type": "json_object"},
         )
+
+
+    except openai.APITimeoutError as exc:
+        raise LLMError(
+            "Час очікування відповіді моделі вичерпано.",
+            status_code=504
+        ) from exc
+
+    except openai.APIConnectionError as exc:
+        raise LLMError(
+            "Не вдалося встановити з'єднання з API моделі.",
+            status_code=503
+        ) from exc
+
+    except openai.APIStatusError as exc:
+        if exc.status_code == 429:
+            raise LLMError(
+                "Перевищено ліміт запитів до моделі.",
+                status_code=429
+            ) from exc
+
+        if exc.status_code == 503:
+            raise LLMError(
+                "Сервіс моделі тимчасово недоступний.",
+                status_code=503
+            ) from exc
+
+        if exc.status_code in (401, 403):
+            raise LLMError(
+                "Помилка авторизації API моделі. Перевірте API-ключ.",
+                status_code=502
+            ) from exc
+
+        raise LLMError(
+            f"Помилка API моделі: {exc}",
+            status_code=502
+        ) from exc
+
     except Exception as exc:
-        raise LLMError(f"Помилка запиту до моделі: {exc}") from exc
+        raise LLMError(
+            f"Непередбачена помилка під час роботи моделі: {exc}",
+            status_code=502
+        ) from exc
+    
+    except Exception as exc:
+        raise LLMError(f"Помилка запиту до моделі: {exc}")
 
     elapsed = time.perf_counter() - start_time
 

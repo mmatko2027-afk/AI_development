@@ -16,12 +16,11 @@
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-
 from . import extraction
-
+from . import extraction, images, llm
 app = FastAPI(title="Розбір рахунків — ПР7")
 
 INDEX_PAGE = Path(__file__).parent / "templates" / "index.html"
@@ -66,15 +65,16 @@ def api_samples() -> dict:
 
 @app.post("/api/extract")
 async def api_extract(image: UploadFile = File(...)) -> dict:
-    """Розібрати документ і повернути поля, проблеми й рішення.
-
-    Сторінка очікує обʼєкт із полями `decision`, `reasons`, `document`,
-    `issues`, `image`, `model`, `elapsed`, `usage` — див. `result_to_dict`.
-
-    Збої тут не оброблено. Порожній файл, не зображення, завеликий файл,
-    таймаут або ліміт моделі, невалідна відповідь — усе це поки що
-    закінчується помилкою 500. Який статус і яке повідомлення має
-    отримати сторінка в кожному випадку — вирішуєте ви.
-    """
     content = await image.read()
-    return result_to_dict(extraction.process(content))
+    try:
+        return result_to_dict(extraction.process(content))
+    except images.ImageError as exc:
+        status_code = 413 if "занадто великий" in str(exc).lower() else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Внутрішня помилка застосунку: {exc}",
+        ) from exc

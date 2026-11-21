@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 
 from . import images, llm, rules
 from .rules import Issue
-
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from . import extraction, images, llm
 
 @dataclass
 class Result:
