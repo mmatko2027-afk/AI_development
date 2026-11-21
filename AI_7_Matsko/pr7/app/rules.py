@@ -235,14 +235,22 @@ def check(document: dict) -> list[Issue]:
                 )
             )
 
-    # Перевірка строку дії рахунку.
     valid_until = document.get("valid_until")
 
-    if valid_until and invoice_date is not None:
+    if valid_until:
         try:
             valid_date = date.fromisoformat(valid_until)
 
-            if valid_date < invoice_date:
+            if valid_date < date.today():
+                issues.append(
+                    Issue(
+                        "valid_until",
+                        "date",
+                        "Строк дії рахунку вже минув."
+                    )
+                )
+
+            if invoice_date is not None and valid_date < invoice_date:
                 issues.append(
                     Issue(
                         "valid_until",

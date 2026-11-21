@@ -57,15 +57,27 @@ def decide(document: dict, issues: list[Issue]) -> tuple[str, list[str]]:
     """Вирішити долю документа за вилученими полями й знайденими
     проблемами. Повертає рішення і його причини."""
     reasons = []
+    errors = []
+    warnings = []
 
     if document.get("document_type") != "invoice":
         return "reject", ["Документ не є рахунком на оплату."]
 
-    if issues:
-        for issue in issues:
-            reasons.append(issue.message)
+    for issue in issues:
+        if issue.severity == "warning":
+            warnings.append(issue.message)
+        else:
+            errors.append(issue.message)
 
+    if errors:
+        reasons.extend(errors)
+        reasons.extend(warnings)
         return "review", reasons
+
+    if warnings:
+        reasons.append("Критичні перевірки пройдено.")
+        reasons.extend(warnings)
+        return "auto", reasons
 
     return "auto", ["Усі перевірки пройдено успішно."]
 

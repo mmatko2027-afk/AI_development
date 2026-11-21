@@ -21,72 +21,79 @@
 невалідна відповідь) перенесіть сюди. Відмова моделі обробляти
 зображення — ще один вид збою, якого в текстових роботах не було.
 """
-
 import base64
+import json
 import os
 import time
 
+import openai
 from dotenv import load_dotenv
 from openai import OpenAI
-import json
 
-import openai
 from .images import PreparedImage
 from .schema import output_schema, validate
 
+
 load_dotenv()
 
-# Доступ до сервісу. Значень тут немає навмисно — вони у вашому `.env`.
 BASE_URL = os.getenv("LLM_BASE_URL")
 API_KEY = os.getenv("LLM_API_KEY")
 MODEL = os.getenv("LLM_MODEL")
 
-# Параметри генерації.
 TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2500"))
 TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
 
+_client = None
+
 
 class LLMError(Exception):
-    """Помилка роботи з моделлю, зрозуміла решті застосунку.
 
-    Заготовка. Види збоїв ті самі, що в ПР4–ПР6; розрізняти їх вам
-    доведеться так само — таймаут і невірний ключ користувач має побачити
-    по-різному.
-    """
     def __init__(self, message: str, status_code: int = 502):
         super().__init__(message)
         self.status_code = status_code
 
 
 def get_client():
-    """Повернути готовий до роботи клієнт сервісу — один на застосунок."""
+    global _client
+
+    if _client is not None:
+        return _client
+
     if not API_KEY:
         raise LLMError("Не вказано LLM_API_KEY у файлі .env.")
 
     if not MODEL:
         raise LLMError("Не вказано LLM_MODEL у файлі .env.")
+
     if not BASE_URL:
         raise LLMError("Не вказано LLM_BASE_URL у файлі .env.")
 
-    return OpenAI(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        timeout=TIMEOUT,
-    )
+    try:
+        _client = OpenAI(
+            api_key=API_KEY,
+            base_url=BASE_URL,
+            timeout=TIMEOUT,
+        )
+
+    except Exception as exc:
+        raise LLMError(
+            "Не вдалося створити клієнт API."
+        ) from exc
+
+    return _client
 
 
 def build_messages(image: PreparedImage) -> list[dict]:
-    """Скласти список повідомлень для моделі: інструкція і зображення."""
     image_base64 = base64.b64encode(image.data).decode("utf-8")
-    
+
     instruction = """
 Проаналізуй зображення документа.
 
 Потрібно визначити тип документа.
 
 Якщо це рахунок на оплату, у полі document_type
-обов'язково поверни значення "invoice".
+поверни значення "invoice".
 
 Якщо це не рахунок на оплату, поверни значення "other".
 
@@ -118,15 +125,18 @@ def build_messages(image: PreparedImage) -> list[dict]:
 """
 
     schema = output_schema()
-    
-    schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
+    schema_json = json.dumps(
+        schema,
+        ensure_ascii=False,
+        indent=2,
+    )
 
     instruction += f"\n\nСтруктура відповіді:\n{schema_json}\n"
 
     return [
         {
             "role": "system",
-            "content": instruction,
+            "content": instruction.strip(),
         },
         {
             "role": "user",
@@ -147,13 +157,7 @@ def build_messages(image: PreparedImage) -> list[dict]:
 
 
 def extract(image: PreparedImage) -> dict:
-    """Отримати від моделі поля документа й повернути їх перевіреними за
-    схемою.
 
-    Повертає щонайменше перевірені дані (`app/schema.py`), назву моделі,
-    час виконання і `usage` — токени запиту й відповіді. Точний склад —
-    ваше рішення; `app/extraction.py` збирає з нього `Result`.
-    """
     client = get_client()
     messages = build_messages(image)
 
@@ -168,70 +172,79 @@ def extract(image: PreparedImage) -> dict:
             response_format={"type": "json_object"},
         )
 
-
     except openai.APITimeoutError as exc:
         raise LLMError(
             "Час очікування відповіді моделі вичерпано.",
-            status_code=504
+            status_code=504,
         ) from exc
 
     except openai.APIConnectionError as exc:
         raise LLMError(
             "Не вдалося встановити з'єднання з API моделі.",
-            status_code=503
+            status_code=503,
         ) from exc
 
     except openai.APIStatusError as exc:
         if exc.status_code == 429:
             raise LLMError(
                 "Перевищено ліміт запитів до моделі.",
-                status_code=429
+                status_code=429,
             ) from exc
 
         if exc.status_code == 503:
             raise LLMError(
                 "Сервіс моделі тимчасово недоступний.",
-                status_code=503
+                status_code=503,
             ) from exc
 
         if exc.status_code in (401, 403):
             raise LLMError(
                 "Помилка авторизації API моделі. Перевірте API-ключ.",
-                status_code=502
+                status_code=502,
             ) from exc
 
         raise LLMError(
-            f"Помилка API моделі: {exc}",
-            status_code=502
+            "Помилка API моделі.",
+            status_code=502,
         ) from exc
 
     except Exception as exc:
         raise LLMError(
-            f"Непередбачена помилка під час роботи моделі: {exc}",
-            status_code=502
+            "Непередбачена помилка під час роботи моделі.",
+            status_code=502,
         ) from exc
-    
+
     elapsed = time.perf_counter() - start_time
 
     if not response.choices:
         raise LLMError("Модель не повернула відповідь.")
 
     message = response.choices[0].message
+
     refusal = getattr(message, "refusal", None)
+
     if refusal:
-        raise LLMError(f"Модель відмовилася обробляти зображення: {refusal}", status_code=422)
+        raise LLMError(
+            "Модель відмовилася обробляти зображення.",
+            status_code=422,
+        )
+
     content = message.content
-    if not content:
+
+    if not isinstance(content, str) or not content.strip():
         raise LLMError("Модель повернула порожню відповідь.")
 
     try:
         data = validate(content)
+
     except ValueError as exc:
-        raise LLMError(f"Некоректна відповідь моделі: {exc}") from exc
+        raise LLMError(
+            f"Некоректна відповідь моделі: {exc}"
+        ) from exc
 
     usage = {}
 
-    if response.usage:
+    if response.usage is not None:
         usage = {
             "prompt_tokens": response.usage.prompt_tokens,
             "completion_tokens": response.usage.completion_tokens,
