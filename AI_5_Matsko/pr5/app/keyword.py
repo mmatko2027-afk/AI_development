@@ -43,15 +43,10 @@ def tokenize(text: str) -> list[str]:
     однаково, інакше збігів не буде.
     """
 
-    text = text.lower()
-
-    pattern = (
-        r"[a-zа-яіїєґ0-9]+"
-        r"(?:[-_][a-zа-яіїєґ0-9]+)*"
-    )
-
+    text = text.lower().replace("ʼ", "'").replace("’", "'")
+    pattern = r"[a-zа-яіїєґ0-9]+(?:['_-][a-zа-яіїєґ0-9]+)*"
     return re.findall(pattern, text)
-    
+        
 
 
 def build(chunks: list[Chunk]) -> KeywordIndex:
@@ -122,6 +117,8 @@ def search(
     results = []
 
     for number, score in enumerate(scores):
+        if score <= 0:
+           continue
 
         chunk = index.chunks[number]
 

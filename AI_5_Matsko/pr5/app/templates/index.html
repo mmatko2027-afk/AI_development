@@ -157,7 +157,7 @@
       const meta = document.createElement('div');
       meta.className = 'meta';
       const parts = [hit.source];
-      for (const key of ['heading', 'category', 'product', 'audience', 'updated', 'status']) {
+      for (const key of ['section', 'category', 'product', 'audience', 'updated', 'status']) {
         if (m[key]) parts.push(`${key}: ${m[key]}`);
       }
       meta.innerHTML = parts.map(() => '<span></span>').join('');

@@ -92,7 +92,8 @@ def get_overlap(text: str, max_length: int) -> str:
     return " ".join(overlap_words)
 
 
-def split_long_paragraph(paragraph: str) -> list[str]:
+
+def split_long_paragraph(paragraph: str, limit: int) -> list[str]:
     """Split a long paragraph without breaking words."""
 
     words = paragraph.split()
@@ -101,13 +102,13 @@ def split_long_paragraph(paragraph: str) -> list[str]:
 
     overlap_size = max(
         0,
-        min(CHUNK_OVERLAP, CHUNK_SIZE - 1)
+        min(CHUNK_OVERLAP, limit - 1)
     )
 
     for word in words:
         candidate = " ".join(current_words + [word])
 
-        if current_words and len(candidate) > CHUNK_SIZE:
+        if current_words and len(candidate) > limit:
             parts.append(" ".join(current_words))
 
             overlap = get_overlap(
@@ -123,6 +124,7 @@ def split_long_paragraph(paragraph: str) -> list[str]:
         parts.append(" ".join(current_words))
 
     return parts
+
 
 
 def load_documents(docs_dir: Path = DOCS_DIR) -> list[tuple[str, dict, str]]:
@@ -164,12 +166,7 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
         return []
 
     chunks = []
-    sections = text.split("\n## ")
-
-    overlap_size = max(
-        0,
-        min(CHUNK_OVERLAP, CHUNK_SIZE - 1)
-    )
+    sections = ("\n" + text).split("\n## ")
 
     for section_number, section in enumerate(sections):
         section = section.strip()
@@ -185,8 +182,20 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
             section_title = ""
             section_body = section
 
+        prefix = f"{section_title}\n" if section_title else ""
+
+        limit = CHUNK_SIZE - len(prefix)
+
+        if limit <= 0:
+            raise ValueError("Section title is too long for CHUNK_SIZE")
+
         if not section_body:
             continue
+
+        overlap_size = max(
+            0,
+            min(CHUNK_OVERLAP, limit - 1)
+        )
 
         paragraphs = [
             paragraph.strip()
@@ -203,23 +212,23 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
 
         for paragraph in paragraphs:
 
-            if len(paragraph) > CHUNK_SIZE:
+            if len(paragraph) > limit:
                 if current_text:
                     chunks.append(
                         Chunk(
-                            text=current_text,
+                            text=f"{prefix}{current_text}",
                             source=source,
                             metadata=chunk_metadata
                         )
                     )
                     current_text = ""
 
-                parts = split_long_paragraph(paragraph)
+                parts = split_long_paragraph(paragraph, limit)
 
                 for part in parts:
                     chunks.append(
                         Chunk(
-                            text=part,
+                            text=f"{prefix}{part}",
                             source=source,
                             metadata=chunk_metadata
                         )
@@ -230,13 +239,13 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
             if not current_text:
                 current_text = paragraph
 
-            elif len(current_text) + len(paragraph) + 2 <= CHUNK_SIZE:
+            elif len(current_text) + len(paragraph) + 2 <= limit:
                 current_text += "\n\n" + paragraph
 
             else:
                 chunks.append(
                     Chunk(
-                        text=current_text,
+                        text=f"{prefix}{current_text}",
                         source=source,
                         metadata=chunk_metadata
                     )
@@ -252,19 +261,17 @@ def split(text: str, source: str, metadata: dict) -> list[Chunk]:
                 else:
                     current_text = paragraph
 
-                if len(current_text) > CHUNK_SIZE:
-                    current_text = paragraph
-
         if current_text:
             chunks.append(
                 Chunk(
-                    text=current_text,
+                    text=f"{prefix}{current_text}",
                     source=source,
                     metadata=chunk_metadata
                 )
             )
 
     return chunks
+
 
 
 
