@@ -28,7 +28,15 @@ import os
 import time
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 
 load_dotenv()
 
@@ -44,16 +52,35 @@ TIMEOUT = float(os.getenv("LLM_TIMEOUT", "30"))
 
 _client = None
 
+
 class LLMError(Exception):
-    """Помилка роботи з моделлю, зрозуміла решті застосунку.
+    kind = "llm_error"
+    status_code = 502
 
-    Заготовка. Види збоїв ті самі, що в ПР3–ПР7. Чи вважати збоєм
-    виклик інструмента з назвою, якої немає, або з аргументами, що не є
-    JSON, — чи це нормальна відповідь моделі, яку обробить
-    `app/tools.py`, — вирішуєте ви.
-    """
-    pass
 
+class LLMTimeoutError(LLMError):
+    kind = "timeout"
+    status_code = 504
+
+
+class LLMRateLimitError(LLMError):
+    kind = "rate_limit"
+    status_code = 429
+
+
+class LLMAuthError(LLMError):
+    kind = "auth"
+    status_code = 401
+
+
+class LLMInputError(LLMError):
+    kind = "invalid_request"
+    status_code = 400
+
+
+class LLMServiceError(LLMError):
+    kind = "unavailable"
+    status_code = 503
 SYSTEM_PROMPT = """
 Ти помічник клієнта магазину.
 
@@ -85,7 +112,7 @@ def get_client():
 
     if _client is None:
         if not API_KEY:
-            raise LLMError("Не задано LLM_API_KEY у файлі .env")
+            raise LLMAuthError("Не задано LLM_API_KEY у файлі .env")
 
         try:
             if BASE_URL:
@@ -129,7 +156,10 @@ def chat(messages: list[dict], tools: list[dict], tool_choice: str = "auto") -> 
     `app/assistant.py` викликає цю функцію стільки разів, скільки
     потрібно, і сумує час і токени.
     """
+    if not MODEL:
+        raise LLMInputError("Не задано LLM_MODEL у файлі .env")
     start = time.perf_counter()
+    
     try:
         response = get_client().chat.completions.create(
             model=MODEL,
@@ -139,8 +169,20 @@ def chat(messages: list[dict], tools: list[dict], tool_choice: str = "auto") -> 
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
         )
+    except APITimeoutError as exc:
+        raise LLMTimeoutError(f"Час очікування відповіді перевищено: {exc}") from exc
+    except RateLimitError as exc:
+        raise LLMRateLimitError(f"Перевищено ліміт швидкості запитів: {exc}") from exc
+    except AuthenticationError as exc:
+        raise LLMAuthError(f"Помилка автентифікації: {exc}") from exc
+    except BadRequestError as exc:
+        raise LLMInputError(f"Помилка вхідних даних: {exc}") from exc
+    except APIStatusError as exc:
+        raise LLMServiceError(f"Помилка сервісу: {exc}") from exc
+    except APIConnectionError as exc:
+        raise LLMServiceError(f"Помилка підключення до сервісу: {exc}") from exc
     except Exception as exc:
-        raise LLMError(f"Помилка мовної моделі: {exc}") from exc
+        raise LLMError(f"Невідома помилка мовної моделі: {exc}") from exc
 
     elapsed = time.perf_counter() - start
 

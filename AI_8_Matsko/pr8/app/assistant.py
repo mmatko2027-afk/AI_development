@@ -104,6 +104,15 @@ def answer(question: str, customer_id: str) -> Answer:
                 tool_choice="auto",
             )
         except llm.LLMError as exc:
+            user_text = (
+                str(exc)
+                if isinstance(exc, (
+                    llm.LLMTimeoutError,
+                    llm.LLMRateLimitError,
+                    llm.LLMServiceError
+                ))
+                else "Вибачте, сервіс підтримки тимчасово недоступний. Спробуйте пізніше."
+            )
             return Answer(
                 text=f"Не вдалося отримати відповідь від мовної моделі: {exc}",
                 calls=calls,
